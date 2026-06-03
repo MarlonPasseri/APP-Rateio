@@ -63,31 +63,36 @@ $("#btn-upload").onclick = async () => {
 
 $("#mes").onchange = carregarColabs;
 
+const COLAB_MAP = new Map();                       // texto exibido -> {id, nome}
+const displayColab = (c) => `${c.nome}${c.id ? ` (${c.id})` : ""}`;
+const fmtMoedaInput = (el) => {
+  const n = parseNum(el.value);
+  el.value = n ? n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "";
+};
+
 function carregarColabs() {
   if (!TS) return;
   COLABS = C.colaboradores(TS, $("#mes").value);
-  document.querySelectorAll(".seg-select").forEach(preencherSelect);
-}
-
-function preencherSelect(sel) {
-  const atual = sel.value;
-  sel.innerHTML = `<option value="">— selecione —</option>` +
-    COLABS.map((c) => `<option value="${c.id}|${c.nome}">${c.nome}${c.id ? ` (${c.id})` : ""}</option>`).join("");
-  sel.value = atual;
+  COLAB_MAP.clear();
+  COLABS.forEach((c) => COLAB_MAP.set(displayColab(c), { id: c.id, nome: c.nome }));
+  $("#lista-colabs").innerHTML = COLABS.map((c) => `<option value="${displayColab(c)}"></option>`).join("");
+  revisarSegurados();
 }
 
 function addSeg() {
   const div = document.createElement("div");
   div.className = "seg-row";
   div.innerHTML =
-    `<div><label>Segurado</label><select class="seg-select"></select></div>` +
+    `<div><label>Segurado</label><input class="seg-input" list="lista-colabs" placeholder="Digite para buscar…" autocomplete="off" /></div>` +
     `<div><label>Valor</label><div class="field"><span class="pre">R$</span><input class="seg-valor has-pre" inputmode="decimal" placeholder="0,00" /></div></div>` +
     `<div><button class="icon-btn" title="Remover segurado" aria-label="Remover segurado">${ICON.trash}</button></div>`;
   $("#seg-lista").appendChild(div);
-  preencherSelect(div.querySelector(".seg-select"));
-  div.querySelector(".icon-btn").onclick = () => { div.remove(); recalcSoma(); };
-  div.querySelector(".seg-valor").oninput = recalcSoma;
-  div.querySelector(".seg-select").onchange = () => setStep(4);
+  const inp = div.querySelector(".seg-input");
+  const val = div.querySelector(".seg-valor");
+  div.querySelector(".icon-btn").onclick = () => { div.remove(); recalcSoma(); revisarSegurados(); };
+  val.oninput = recalcSoma;
+  val.onblur = () => fmtMoedaInput(val);
+  inp.oninput = () => { setStep(4); revisarSegurados(); };
   recalcSoma();
 }
 $("#btn-add-seg").onclick = addSeg;
@@ -95,11 +100,33 @@ $("#btn-add-seg").onclick = addSeg;
 function lerSegurados() {
   const out = [];
   document.querySelectorAll(".seg-row").forEach((row) => {
-    const v = row.querySelector(".seg-select").value;
+    const txt = row.querySelector(".seg-input").value.trim();
     const valor = parseNum(row.querySelector(".seg-valor").value);
-    if (v) { const [id, nome] = v.split("|"); out.push({ id, nome, valor }); }
+    if (!txt) return;
+    const c = COLAB_MAP.get(txt);
+    out.push(c ? { id: c.id, nome: c.nome, valor } : { id: "", nome: txt, valor });
   });
   return out;
+}
+
+// Marca duplicados e avisa sobre nomes que não existem no mês selecionado (polimentos 4 e 5).
+function revisarSegurados() {
+  const rows = [...document.querySelectorAll(".seg-row")];
+  const contagem = new Map();
+  rows.forEach((row) => {
+    const t = row.querySelector(".seg-input").value.trim();
+    if (t) contagem.set(t, (contagem.get(t) || 0) + 1);
+  });
+  const foraDoMes = [];
+  rows.forEach((row) => {
+    const inp = row.querySelector(".seg-input");
+    const t = inp.value.trim();
+    inp.classList.toggle("dup", !!t && contagem.get(t) > 1);
+    if (t && COLABS.length && !COLAB_MAP.has(t)) foraDoMes.push(t);
+  });
+  msg($("#seg-status"), foraDoMes.length
+    ? `Não consta(m) no mês selecionado: ${[...new Set(foraDoMes)].join(", ")}. Confira o nome ou o mês.`
+    : "", "warn");
 }
 
 function recalcSoma() {
@@ -112,6 +139,7 @@ function recalcSoma() {
   $("#chip-dif").classList.toggle("neg", dif < -0.005);
 }
 $("#valor_boleto").oninput = recalcSoma;
+$("#valor_boleto").onblur = () => fmtMoedaInput($("#valor_boleto"));
 
 $("#btn-calc").onclick = () => {
   const st = $("#calc-status");
@@ -141,6 +169,8 @@ function mostrarResultado(d) {
   let avisos = "";
   if (d.segurados_sem_horas.length)
     avisos += `<div class="msg warn">${ICON.warn}<div>Sem horas na TS no mês (não rateados): ${d.segurados_sem_horas.join(", ")}</div></div>`;
+  if (d.segurados_proporcao_suspeita && d.segurados_proporcao_suspeita.length)
+    avisos += `<div class="msg warn">${ICON.warn}<div>Proporções da TS não somam 100% no mês para: ${d.segurados_proporcao_suspeita.map((x) => `${x.nome} (${(x.soma * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%)`).join(", ")}. A distribuição entre GPs pode estar distorcida — verifique a planilha.</div></div>`;
   if (Math.abs(d.diferenca_boleto_segurados) > 0.009)
     avisos += `<div class="msg warn">${ICON.warn}<div>Boleto e soma dos segurados diferem em ${fmtBRL(d.diferenca_boleto_segurados)}. O VALOR FINAL foi rateado pelo valor do boleto.</div></div>`;
   avisos += `<div class="msg ok">${ICON.check}<div>Rateio gerado: ${d.qtd_gps} GP(s), ${d.qtd_segurados} segurado(s).</div></div>`;

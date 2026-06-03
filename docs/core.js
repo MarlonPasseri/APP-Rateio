@@ -223,6 +223,19 @@
       .filter((s) => !comHoras.has(String(s.id || "").trim() || norm(s.nome || "")))
       .map((s) => s.nome);
 
+    // Integridade da TS: a soma das proporções de cada segurado no mês deve ser ~1.
+    // Desvio indica erro de dado que distorce a distribuição entre GPs.
+    const propPorSeg = new Map();
+    for (const r of temp2) {
+      const k = r.id || norm(r.nome);
+      const cur = propPorSeg.get(k) || { nome: r.nome, soma: 0 };
+      cur.soma += r.proporcao;
+      propPorSeg.set(k, cur);
+    }
+    const proporcaoSuspeita = [...propPorSeg.values()]
+      .filter((x) => Math.abs(x.soma - 1) > 0.01)
+      .map((x) => ({ nome: x.nome, soma: round(x.soma, 4) }));
+
     return {
       mes_key: mk,
       valor_boleto: round(valorBoleto, 2),
@@ -232,6 +245,7 @@
       qtd_gps: tabelaFinal.length,
       qtd_segurados: segurados.length,
       segurados_sem_horas: semHoras,
+      segurados_proporcao_suspeita: proporcaoSuspeita,
       temp2, tabela_final: tabelaFinal,
     };
   }

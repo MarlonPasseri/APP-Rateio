@@ -182,6 +182,27 @@ test("calcularPlanoSaude: casa por nome quando id não bate", () => {
   assert.equal(res.tabela_final[0].valor_final, 300);
 });
 
+test("calcularPlanoSaude: sinaliza proporção que não soma 1 no mês", () => {
+  // proporções somam 0,9 para a pessoa -> erro de dado na TS
+  const ts = C.carregarTS(tsWorkbook([
+    ["X1", "Erro Dado", JAN, 168, 100, 80, 0.4],
+    ["X1", "Erro Dado", JAN, 168, 200, 100, 0.5],
+  ]));
+  const res = C.calcularPlanoSaude(ts, "2025-01", [{ id: "X1", nome: "Erro Dado", valor: 500 }], 500);
+  assert.equal(res.segurados_proporcao_suspeita.length, 1);
+  assert.equal(res.segurados_proporcao_suspeita[0].nome, "Erro Dado");
+  assert.equal(res.segurados_proporcao_suspeita[0].soma, 0.9);
+  // mesmo com dado torto, o VALOR FINAL ainda fecha no boleto
+  assert.equal(C.round(res.tabela_final.reduce((a, r) => a + r.valor_final, 0), 2), 500);
+});
+
+test("calcularPlanoSaude: proporção correta não gera aviso", () => {
+  const ts = cenarioBase();
+  const res = C.calcularPlanoSaude(ts, "2025-01",
+    [{ id: "COL001", nome: "Ana Lima", valor: 800 }], 800);
+  assert.deepEqual(res.segurados_proporcao_suspeita, []);
+});
+
 // ---------------------------------------------------------------- montarWorkbook (round-trip)
 test("montarWorkbook gera abas e valores que sobrevivem à releitura", () => {
   const ts = cenarioBase();

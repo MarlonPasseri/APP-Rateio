@@ -92,6 +92,7 @@ button:active{transform:translateY(1px)}
 
 .seg-row{display:grid;grid-template-columns:1fr 170px 42px;gap:12px;align-items:end;margin-bottom:11px}
 .seg-row .icon-btn{height:39px;justify-content:center}
+.seg-row input.dup{border-color:var(--danger);box-shadow:0 0 0 3px rgba(220,38,38,.12)}
 
 .chips{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}
 .chip{flex:1;min-width:150px;background:var(--muted);border:1px solid var(--border);border-radius:10px;padding:11px 14px}
