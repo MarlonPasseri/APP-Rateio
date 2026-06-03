@@ -1,0 +1,20 @@
+# Dados — NUNCA versionar planilhas reais
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+uploads/
+saidas/
+
+# Permite a biblioteca vendorizada (não é dado)
+!docs/vendor/*.js
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Sistema
+.DS_Store
+Thumbs.db
