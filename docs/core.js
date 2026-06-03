@@ -131,48 +131,62 @@
   }
 
   // ---- Validação de entrada (independente da UI) ----
-  function validarEntrada(d) {
+  // Checagem comum a qualquer lista de pessoas com valor (segurados/funcionários).
+  function _checarLista(lista, rotulo) {
     const erros = [];
-    if (!d || typeof d !== "object") return { ok: false, erros: ["Dados de entrada ausentes."] };
-    if (!d.mes) erros.push("Selecione o mês de referência.");
-    if (!d.seguradora || !String(d.seguradora).trim()) erros.push("Informe a seguradora.");
-    if (!d.codigo_boleto || !String(d.codigo_boleto).trim()) erros.push("Informe o código do boleto.");
-    const vb = Number(d.valor_boleto);
-    if (!isFinite(vb) || vb <= 0) erros.push("O valor do boleto deve ser maior que zero.");
-
-    const segs = Array.isArray(d.segurados) ? d.segurados : [];
-    if (!segs.length) erros.push("Adicione ao menos um segurado.");
+    const itens = Array.isArray(lista) ? lista : [];
+    if (!itens.length) erros.push(`Adicione ao menos um ${rotulo}.`);
 
     const chaves = new Set(), dups = new Set();
-    let somaSeg = 0;
-    for (const s of segs) {
+    let soma = 0;
+    for (const s of itens) {
       const v = toFloat(s.valor);
-      somaSeg += v;
-      if (v < 0) erros.push(`Valor negativo informado para "${s.nome || "segurado"}".`);
+      soma += v;
+      if (v < 0) erros.push(`Valor negativo informado para "${s.nome || rotulo}".`);
       const chave = String(s.id || "").trim() || norm(s.nome || "");
       if (chave) {
         if (chaves.has(chave)) dups.add(s.nome || chave);
         else chaves.add(chave);
       }
     }
-    if (dups.size) erros.push(`Segurado(s) repetido(s): ${[...dups].join(", ")}.`);
-    if (segs.length && somaSeg <= 0) erros.push("Informe o valor de pelo menos um segurado.");
+    if (dups.size) erros.push(`${rotulo[0].toUpperCase() + rotulo.slice(1)}(s) repetido(s): ${[...dups].join(", ")}.`);
+    if (itens.length && soma <= 0) erros.push(`Informe o valor de pelo menos um ${rotulo}.`);
+    return erros;
+  }
 
+  function validarEntrada(d) {
+    if (!d || typeof d !== "object") return { ok: false, erros: ["Dados de entrada ausentes."] };
+    const erros = [];
+    if (!d.mes) erros.push("Selecione o mês de referência.");
+    if (!d.seguradora || !String(d.seguradora).trim()) erros.push("Informe a seguradora.");
+    if (!d.codigo_boleto || !String(d.codigo_boleto).trim()) erros.push("Informe o código do boleto.");
+    const vb = Number(d.valor_boleto);
+    if (!isFinite(vb) || vb <= 0) erros.push("O valor do boleto deve ser maior que zero.");
+    erros.push(..._checarLista(d.segurados, "segurado"));
     return { ok: erros.length === 0, erros };
   }
 
-  // ---- Cálculo do rateio de Plano de Saúde ----
-  function calcularPlanoSaude(ts, mk, segurados, valorBoleto) {
-    valorBoleto = Number(valorBoleto);
+  function validarFerias(d) {
+    if (!d || typeof d !== "object") return { ok: false, erros: ["Dados de entrada ausentes."] };
+    const erros = [];
+    if (!d.mes) erros.push("Selecione o mês de referência.");
+    erros.push(..._checarLista(d.funcionarios, "funcionário"));
+    return { ok: erros.length === 0, erros };
+  }
+
+  // ---- Motor comum de rateio ----
+  // Distribui o valor de cada pessoa pelos GPs do mês conforme a Proporção de Hora.
+  // `itens`: [{id, nome, valor}]. Retorna a agregação por GP + auditoria + diagnósticos.
+  function _ratear(ts, mk, itens) {
     const porId = new Map(), porNome = new Map();
-    let totalSegurados = 0;
-    for (const s of segurados) {
+    let totalItens = 0;
+    for (const s of itens) {
       const v = toFloat(s.valor);
-      totalSegurados += v;
+      totalItens += v;
       if (s.id) porId.set(String(s.id).trim(), v);
       if (s.nome) porNome.set(norm(s.nome), v);
     }
-    const valorDoSegurado = (l) => {
+    const valorDe = (l) => {
       if (l.id && porId.has(l.id)) return porId.get(l.id);
       const n = norm(l.nome);
       if (porNome.has(n)) return porNome.get(n);
@@ -183,12 +197,12 @@
     const comHoras = new Set();
     for (const l of ts.linhas) {
       if (l.mes_key !== mk) continue;
-      const v = valorDoSegurado(l);
+      const v = valorDe(l);
       if (v === null) continue;
       comHoras.add(l.id || norm(l.nome));
       temp2.push({
         id: l.id, nome: l.nome, gp: l.gp, horas: l.horas, proporcao: l.proporcao,
-        valor_segurado: v, valor_linha: v * l.proporcao,
+        valor_pessoa: v, valor_linha: v * l.proporcao,
       });
     }
 
@@ -198,73 +212,146 @@
       horasPorGp.set(r.gp, (horasPorGp.get(r.gp) || 0) + r.horas);
     }
     const totalValor = [...valorPorGp.values()].reduce((a, b) => a + b, 0);
-
     const gps = [...valorPorGp.keys()].sort((a, b) =>
       (typeof a === typeof b) ? (a > b ? 1 : a < b ? -1 : 0) : String(a).localeCompare(String(b)));
-    const tabelaFinal = gps.map((gp) => {
-      const valor = valorPorGp.get(gp);
-      const prop = totalValor ? valor / totalValor : 0;
-      return {
-        gp, horas: round(horasPorGp.get(gp) || 0, 4),
-        valor: round(valor, 2), proporcao: prop, valor_final: round(valorBoleto * prop, 2),
-      };
-    });
 
-    // ajuste de centavos: garante soma do VALOR FINAL == valor do boleto
-    const somaFinal = tabelaFinal.reduce((a, r) => a + r.valor_final, 0);
-    const dif = round(valorBoleto - somaFinal, 2);
+    const semHoras = itens
+      .filter((s) => !comHoras.has(String(s.id || "").trim() || norm(s.nome || "")))
+      .map((s) => s.nome);
+
+    // Integridade da TS: as proporções de cada pessoa no mês devem somar ~1.
+    const propPorPessoa = new Map();
+    for (const r of temp2) {
+      const k = r.id || norm(r.nome);
+      const cur = propPorPessoa.get(k) || { nome: r.nome, soma: 0 };
+      cur.soma += r.proporcao;
+      propPorPessoa.set(k, cur);
+    }
+    const proporcaoSuspeita = [...propPorPessoa.values()]
+      .filter((x) => Math.abs(x.soma - 1) > 0.01)
+      .map((x) => ({ nome: x.nome, soma: round(x.soma, 4) }));
+
+    return { temp2, valorPorGp, horasPorGp, totalItens, totalValor, gps, semHoras, proporcaoSuspeita };
+  }
+
+  // Joga a diferença de arredondamento (alvo - soma) no GP de maior valor_final.
+  function _ajustarCentavos(tabelaFinal, alvo) {
+    const soma = tabelaFinal.reduce((a, r) => a + r.valor_final, 0);
+    const dif = round(alvo - soma, 2);
     if (tabelaFinal.length && dif !== 0) {
       let maior = tabelaFinal[0];
       for (const r of tabelaFinal) if (r.valor_final > maior.valor_final) maior = r;
       maior.valor_final = round(maior.valor_final + dif, 2);
     }
+  }
 
-    const semHoras = segurados
-      .filter((s) => !comHoras.has(String(s.id || "").trim() || norm(s.nome || "")))
-      .map((s) => s.nome);
-
-    // Integridade da TS: a soma das proporções de cada segurado no mês deve ser ~1.
-    // Desvio indica erro de dado que distorce a distribuição entre GPs.
-    const propPorSeg = new Map();
-    for (const r of temp2) {
-      const k = r.id || norm(r.nome);
-      const cur = propPorSeg.get(k) || { nome: r.nome, soma: 0 };
-      cur.soma += r.proporcao;
-      propPorSeg.set(k, cur);
-    }
-    const proporcaoSuspeita = [...propPorSeg.values()]
-      .filter((x) => Math.abs(x.soma - 1) > 0.01)
-      .map((x) => ({ nome: x.nome, soma: round(x.soma, 4) }));
+  // ---- Rateio de Plano de Saúde (valor do boleto rateado pela proporção) ----
+  function calcularPlanoSaude(ts, mk, segurados, valorBoleto) {
+    valorBoleto = Number(valorBoleto);
+    const a = _ratear(ts, mk, segurados);
+    const tabelaFinal = a.gps.map((gp) => {
+      const valor = a.valorPorGp.get(gp);
+      const prop = a.totalValor ? valor / a.totalValor : 0;
+      return {
+        gp, horas: round(a.horasPorGp.get(gp) || 0, 4),
+        valor: round(valor, 2), proporcao: prop, valor_final: round(valorBoleto * prop, 2),
+      };
+    });
+    _ajustarCentavos(tabelaFinal, valorBoleto);
 
     return {
+      tipo: "plano_saude",
       mes_key: mk,
       valor_boleto: round(valorBoleto, 2),
-      total_segurados: round(totalSegurados, 2),
-      total_valor_rateado: round(totalValor, 2),
-      diferenca_boleto_segurados: round(valorBoleto - totalSegurados, 2),
+      total_segurados: round(a.totalItens, 2),
+      total_valor_rateado: round(a.totalValor, 2),
+      diferenca_boleto_segurados: round(valorBoleto - a.totalItens, 2),
       qtd_gps: tabelaFinal.length,
       qtd_segurados: segurados.length,
-      segurados_sem_horas: semHoras,
-      segurados_proporcao_suspeita: proporcaoSuspeita,
-      temp2, tabela_final: tabelaFinal,
+      // chaves específicas (compatibilidade) + genéricas (UI)
+      segurados_sem_horas: a.semHoras,
+      segurados_proporcao_suspeita: a.proporcaoSuspeita,
+      sem_horas: a.semHoras,
+      proporcao_suspeita: a.proporcaoSuspeita,
+      temp2: a.temp2, tabela_final: tabelaFinal,
     };
   }
 
-  // ---- Montagem do workbook de saída (puro; download fica na UI) ----
+  // ---- Rateio de Férias (valor por funcionário; VALOR FINAL = VALOR, sem boleto) ----
+  function calcularFerias(ts, mk, funcionarios) {
+    const a = _ratear(ts, mk, funcionarios);
+    const tabelaFinal = a.gps.map((gp) => {
+      const valor = a.valorPorGp.get(gp);
+      const prop = a.totalValor ? valor / a.totalValor : 0;
+      return {
+        gp, horas: round(a.horasPorGp.get(gp) || 0, 4),
+        valor: round(valor, 2), proporcao: prop, valor_final: round(valor, 2),
+      };
+    });
+    // fecha a soma no que foi de fato rateado (totalValor)
+    _ajustarCentavos(tabelaFinal, round(a.totalValor, 2));
+
+    return {
+      tipo: "ferias",
+      mes_key: mk,
+      total_ferias: round(a.totalItens, 2),
+      total_valor_rateado: round(a.totalValor, 2),
+      qtd_gps: tabelaFinal.length,
+      qtd_funcionarios: funcionarios.length,
+      funcionarios: funcionarios.map((f) => f.nome),
+      funcionarios_sem_horas: a.semHoras,
+      funcionarios_proporcao_suspeita: a.proporcaoSuspeita,
+      sem_horas: a.semHoras,
+      proporcao_suspeita: a.proporcaoSuspeita,
+      temp2: a.temp2, tabela_final: tabelaFinal,
+    };
+  }
+
+  function nomeArquivoFerias(mk, nomes) {
+    const [ano, mes] = mk.split("-");
+    const distintos = [...new Set((nomes || []).filter(Boolean))];
+    const ident = distintos.length === 1 ? sanitizar(distintos[0]) : `${distintos.length}-funcionarios`;
+    return `${ano.slice(2)}-${mes}-Ferias-${ident}.xlsx`;
+  }
+
+  // ---- Preparação da exportação (metadados + nome do arquivo, por tipo) ----
+  function prepararExport(res, extra) {
+    extra = extra || {};
+    if (res.tipo === "ferias") {
+      return {
+        titulo: "Rateio de Férias por GP",
+        info: [["Mês", res.mes_key], ["Soma das férias", res.total_ferias]],
+        detalheAba: "Detalhe_Funcionarios",
+        colValor: "Valor Férias",
+        nomeArquivo: nomeArquivoFerias(res.mes_key, res.funcionarios),
+      };
+    }
+    return {
+      titulo: "Rateio de Plano de Saúde por GP",
+      info: [
+        ["Seguradora", extra.seguradora],
+        ["Código do boleto", extra.codigo_boleto],
+        ["Mês", res.mes_key],
+        ["Valor do boleto", res.valor_boleto],
+        ["Soma dos segurados", res.total_segurados],
+      ],
+      detalheAba: "Detalhe_Segurados",
+      colValor: "Valor Segurado",
+      nomeArquivo: nomeArquivoSaida(res.mes_key, extra.seguradora, extra.codigo_boleto),
+    };
+  }
+
+  // ---- Montagem do workbook de saída (genérica; download fica na UI) ----
   function montarWorkbook(res, meta) {
     const wb = XLSX.utils.book_new();
     const tf = res.tabela_final;
+    const info = meta.info || [];
 
-    const aoa = [
-      ["Rateio de Plano de Saúde por GP"],
-      ["Seguradora", meta.seguradora],
-      ["Código do boleto", meta.codigo_boleto],
-      ["Mês", res.mes_key],
-      ["Valor do boleto", res.valor_boleto],
-      ["Soma dos segurados", res.total_segurados],
-      [],
-      ["GP", "HORAS", "VALOR", "PROPORÇÃO", "VALOR FINAL"],
-    ];
+    const aoa = [[meta.titulo]];
+    info.forEach((r) => aoa.push(r));
+    aoa.push([]);
+    const cab = aoa.length;                 // índice da linha de cabeçalho da tabela
+    aoa.push(["GP", "HORAS", "VALOR", "PROPORÇÃO", "VALOR FINAL"]);
     tf.forEach((r) => aoa.push([r.gp, r.horas, r.valor, r.proporcao, r.valor_final]));
     aoa.push([
       "TOTAL",
@@ -275,30 +362,32 @@
     ]);
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 16 }];
+    ws["!cols"] = [{ wch: 16 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 16 }];
     const fmt = (r, c, z) => { const ref = XLSX.utils.encode_cell({ r, c }); if (ws[ref]) ws[ref].z = z; };
-    fmt(4, 1, "#,##0.00");
-    fmt(5, 1, "#,##0.00");
-    const fim = 8 + tf.length;
-    for (let r = 8; r <= fim; r++) { fmt(r, 2, "#,##0.00"); fmt(r, 3, "0.0000%"); fmt(r, 4, "#,##0.00"); }
+    info.forEach((r, i) => { if (typeof r[1] === "number") fmt(1 + i, 1, "#,##0.00"); });
+    const fim = cab + tf.length + 1;
+    for (let r = cab + 1; r <= fim; r++) { fmt(r, 2, "#,##0.00"); fmt(r, 3, "0.0000%"); fmt(r, 4, "#,##0.00"); }
     XLSX.utils.book_append_sheet(wb, ws, "Rateio");
 
     const aoa2 = [[
       "Id Colaborador", "Nome Colaborador", "GP", "Horas Trabalhadas",
-      "Proporção de Hora", "Valor Segurado", "Valor Rateado (Valor×Prop.)",
+      "Proporção de Hora", meta.colValor || "Valor", "Valor Rateado (Valor×Prop.)",
     ]];
     res.temp2.forEach((r) =>
-      aoa2.push([r.id, r.nome, r.gp, r.horas, r.proporcao, round(r.valor_segurado, 2), round(r.valor_linha, 2)]));
+      aoa2.push([r.id, r.nome, r.gp, r.horas, r.proporcao, round(r.valor_pessoa, 2), round(r.valor_linha, 2)]));
     const ws2 = XLSX.utils.aoa_to_sheet(aoa2);
     ws2["!cols"] = [{ wch: 16 }, { wch: 28 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 14 }, { wch: 22 }];
-    XLSX.utils.book_append_sheet(wb, ws2, "Detalhe_Segurados");
+    XLSX.utils.book_append_sheet(wb, ws2, meta.detalheAba || "Detalhe");
 
     return wb;
   }
 
   return {
     XLSX, COLUNAS, OBRIGATORIAS,
-    norm, mesKey, toFloat, round, sanitizar, nomeArquivoSaida,
-    carregarTS, colaboradores, validarEntrada, calcularPlanoSaude, montarWorkbook,
+    norm, mesKey, toFloat, round, sanitizar, nomeArquivoSaida, nomeArquivoFerias,
+    carregarTS, colaboradores,
+    validarEntrada, validarFerias,
+    calcularPlanoSaude, calcularFerias,
+    prepararExport, montarWorkbook,
   };
 });

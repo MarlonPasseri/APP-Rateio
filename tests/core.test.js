@@ -212,7 +212,7 @@ test("montarWorkbook gera abas e valores que sobrevivem à releitura", () => {
     { id: "COL003", nome: "Carla Reis", valor: 450 },
   ];
   const res = C.calcularPlanoSaude(ts, "2025-01", segurados, 2500);
-  const meta = { seguradora: "Bradesco", codigo_boleto: "B1" };
+  const meta = C.prepararExport(res, { seguradora: "Bradesco", codigo_boleto: "B1" });
   const wb = C.montarWorkbook(res, meta);
 
   // escreve em buffer e relê (round-trip)
@@ -235,4 +235,71 @@ test("montarWorkbook gera abas e valores que sobrevivem à releitura", () => {
   // aba de auditoria: cabeçalho + 5 linhas de detalhe (jan)
   const det = XLSX.utils.sheet_to_json(lido.Sheets["Detalhe_Segurados"], { header: 1, raw: true, blankrows: false });
   assert.equal(det.length, 1 + 5);
+});
+
+// ---------------------------------------------------------------- Férias
+test("validarFerias exige mês e funcionários", () => {
+  assert.equal(C.validarFerias({ mes: "", funcionarios: [] }).ok, false);
+  const ok = C.validarFerias({ mes: "2025-01", funcionarios: [{ id: "A", nome: "Ana", valor: 100 }] });
+  assert.equal(ok.ok, true);
+});
+
+test("validarFerias detecta duplicados e soma zero", () => {
+  const v = C.validarFerias({
+    mes: "2025-01",
+    funcionarios: [{ id: "1", nome: "Ana", valor: 0 }, { id: "1", nome: "Ana", valor: 0 }],
+  });
+  assert.match(v.erros.join(" "), /repetido/i);
+  assert.match(v.erros.join(" "), /valor de pelo menos/i);
+});
+
+test("calcularFerias: VALOR FINAL = VALOR e soma fecha no total das férias", () => {
+  const ts = cenarioBase();
+  const func = [
+    { id: "COL001", nome: "Ana Lima", valor: 1000 },   // 0,5/0,5 -> 500 em 2718 e 2913
+    { id: "COL002", nome: "Bruno Sá", valor: 600 },     // 1,0 -> 600 em 2339
+  ];
+  const res = C.calcularFerias(ts, "2025-01", func);
+  assert.equal(res.tipo, "ferias");
+  assert.equal(res.total_ferias, 1600);
+  assert.equal(res.total_valor_rateado, 1600);
+
+  const porGp = Object.fromEntries(res.tabela_final.map((r) => [r.gp, r.valor_final]));
+  assert.equal(porGp[2339], 600);
+  assert.equal(porGp[2718], 500);
+  assert.equal(porGp[2913], 500);
+
+  // VALOR FINAL == VALOR em todas as linhas (sem reescala de boleto)
+  res.tabela_final.forEach((r) => assert.equal(r.valor_final, r.valor));
+  const somaFinal = res.tabela_final.reduce((a, r) => a + r.valor_final, 0);
+  assert.equal(C.round(somaFinal, 2), 1600);
+});
+
+test("calcularFerias: sinaliza funcionário sem horas no mês", () => {
+  const ts = cenarioBase();
+  const res = C.calcularFerias(ts, "2025-01", [
+    { id: "COL002", nome: "Bruno Sá", valor: 600 },
+    { id: "COL999", nome: "Fantasma", valor: 100 },
+  ]);
+  assert.deepEqual(res.funcionarios_sem_horas, ["Fantasma"]);
+  assert.equal(res.qtd_gps, 1);
+});
+
+test("nomeArquivoFerias: 1 funcionário usa o nome; vários usam a contagem", () => {
+  assert.equal(C.nomeArquivoFerias("2025-01", ["Ana Lima"]), "25-01-Ferias-Ana Lima.xlsx");
+  assert.equal(C.nomeArquivoFerias("2025-03", ["Ana", "Bruno", "Ana"]), "25-03-Ferias-2-funcionarios.xlsx");
+});
+
+test("prepararExport monta metadados por tipo", () => {
+  const ts = cenarioBase();
+  const ferias = C.calcularFerias(ts, "2025-01", [{ id: "COL002", nome: "Bruno Sá", valor: 600 }]);
+  const expF = C.prepararExport(ferias, {});
+  assert.match(expF.titulo, /Férias/);
+  assert.equal(expF.detalheAba, "Detalhe_Funcionarios");
+  assert.match(expF.nomeArquivo, /Ferias-Bruno/);
+
+  const plano = C.calcularPlanoSaude(ts, "2025-01", [{ id: "COL002", nome: "Bruno Sá", valor: 600 }], 600);
+  const expP = C.prepararExport(plano, { seguradora: "Bradesco", codigo_boleto: "B1" });
+  assert.match(expP.titulo, /Plano de Saúde/);
+  assert.equal(expP.detalheAba, "Detalhe_Segurados");
 });

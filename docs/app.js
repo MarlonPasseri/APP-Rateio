@@ -4,7 +4,7 @@
 
 const C = window.RateioCore;
 const $ = (s) => document.querySelector(s);
-let TS = null, COLABS = [], ULTIMO = null;
+let TS = null, COLABS = [], ULTIMO = null, TIPO = "saude";
 
 const ICON = {
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>',
@@ -41,6 +41,33 @@ function setStep(n) {
       : i;
   });
 }
+
+// ---- Tipo de rateio (Plano de Saúde | Férias) ----
+const ROTULO = () => (TIPO === "ferias" ? "funcionário" : "segurado");
+const capitaliza = (s) => s[0].toUpperCase() + s.slice(1);
+
+function setTipo(t) {
+  if (t !== "saude" && t !== "ferias") return;
+  TIPO = t;
+  const fer = t === "ferias";
+  document.body.classList.toggle("modo-ferias", fer);
+  document.querySelectorAll(".tipo[data-tipo]").forEach((c) => c.classList.toggle("sel", c.dataset.tipo === t));
+  $("#titulo-dados").textContent = fer ? "Mês de referência" : "Dados do boleto";
+  $("#sub-dados").textContent = fer ? "Mês das férias a ratear" : "Identificação e valor total do boleto";
+  $("#titulo-seg").textContent = fer ? "Funcionários e valores de férias" : "Segurados e valores";
+  $("#sub-seg").textContent = fer ? "Valor de férias de cada funcionário" : "Valor por segurado já incluindo dependentes, se houver";
+  $("#lbl-seg-add").textContent = fer ? "Adicionar funcionário" : "Adicionar segurado";
+  $("#lbl-soma").textContent = fer ? "Soma das férias" : "Soma dos segurados";
+  document.querySelector('.stp[data-stp="4"] .label-txt').textContent = fer ? "Funcionários" : "Segurados";
+  document.querySelectorAll(".seg-row .seg-input").forEach((inp) => {
+    inp.parentElement.querySelector("label").textContent = capitaliza(ROTULO());
+  });
+  recalcSoma();
+}
+document.querySelectorAll(".tipo[data-tipo]").forEach((c) => {
+  c.onclick = () => setTipo(c.dataset.tipo);
+  c.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setTipo(c.dataset.tipo); } };
+});
 
 $("#btn-upload").onclick = async () => {
   const f = $("#arquivo").files[0];
@@ -82,10 +109,11 @@ function carregarColabs() {
 function addSeg() {
   const div = document.createElement("div");
   div.className = "seg-row";
+  const rot = capitaliza(ROTULO());
   div.innerHTML =
-    `<div><label>Segurado</label><input class="seg-input" list="lista-colabs" placeholder="Digite para buscar…" autocomplete="off" /></div>` +
+    `<div><label>${rot}</label><input class="seg-input" list="lista-colabs" placeholder="Digite para buscar…" autocomplete="off" /></div>` +
     `<div><label>Valor</label><div class="field"><span class="pre">R$</span><input class="seg-valor has-pre" inputmode="decimal" placeholder="0,00" /></div></div>` +
-    `<div><button class="icon-btn" title="Remover segurado" aria-label="Remover segurado">${ICON.trash}</button></div>`;
+    `<div><button class="icon-btn" title="Remover ${ROTULO()}" aria-label="Remover ${ROTULO()}">${ICON.trash}</button></div>`;
   $("#seg-lista").appendChild(div);
   const inp = div.querySelector(".seg-input");
   const val = div.querySelector(".seg-valor");
@@ -144,36 +172,49 @@ $("#valor_boleto").onblur = () => fmtMoedaInput($("#valor_boleto"));
 $("#btn-calc").onclick = () => {
   const st = $("#calc-status");
   if (!TS) { msg(st, "Importe a planilha TS primeiro.", "erro"); return; }
-  const entrada = {
-    mes: $("#mes").value,
-    seguradora: $("#seguradora").value.trim(),
-    codigo_boleto: $("#codigo").value.trim(),
-    valor_boleto: parseNum($("#valor_boleto").value),
-    segurados: lerSegurados(),
-  };
+  const mes = $("#mes").value;
+  const pessoas = lerSegurados();
 
-  const v = C.validarEntrada(entrada);
-  if (!v.ok) { msgs(st, v.erros, "erro"); return; }
+  let res, extra;
+  if (TIPO === "ferias") {
+    const v = C.validarFerias({ mes, funcionarios: pessoas });
+    if (!v.ok) { msgs(st, v.erros, "erro"); return; }
+    res = C.calcularFerias(TS, mes, pessoas);
+    extra = {};
+  } else {
+    const entrada = {
+      mes,
+      seguradora: $("#seguradora").value.trim(),
+      codigo_boleto: $("#codigo").value.trim(),
+      valor_boleto: parseNum($("#valor_boleto").value),
+      segurados: pessoas,
+    };
+    const v = C.validarEntrada(entrada);
+    if (!v.ok) { msgs(st, v.erros, "erro"); return; }
+    res = C.calcularPlanoSaude(TS, mes, entrada.segurados, entrada.valor_boleto);
+    extra = { seguradora: entrada.seguradora, codigo_boleto: entrada.codigo_boleto };
+  }
 
-  const res = C.calcularPlanoSaude(TS, entrada.mes, entrada.segurados, entrada.valor_boleto);
   if (!res.tabela_final.length) {
-    msg(st, "Nenhuma hora encontrada na TS para os segurados no mês selecionado.", "erro");
+    msg(st, `Nenhuma hora encontrada na TS para os ${ROTULO()}s no mês selecionado.`, "erro");
     return;
   }
   msg(st, "", "");
-  ULTIMO = { res, meta: { seguradora: entrada.seguradora, codigo_boleto: entrada.codigo_boleto } };
+  ULTIMO = { res, extra };
   mostrarResultado(res);
 };
 
 function mostrarResultado(d) {
+  const rotulo = d.tipo === "ferias" ? "funcionário" : "segurado";
+  const qtdPessoas = d.tipo === "ferias" ? d.qtd_funcionarios : d.qtd_segurados;
   let avisos = "";
-  if (d.segurados_sem_horas.length)
-    avisos += `<div class="msg warn">${ICON.warn}<div>Sem horas na TS no mês (não rateados): ${d.segurados_sem_horas.join(", ")}</div></div>`;
-  if (d.segurados_proporcao_suspeita && d.segurados_proporcao_suspeita.length)
-    avisos += `<div class="msg warn">${ICON.warn}<div>Proporções da TS não somam 100% no mês para: ${d.segurados_proporcao_suspeita.map((x) => `${x.nome} (${(x.soma * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%)`).join(", ")}. A distribuição entre GPs pode estar distorcida — verifique a planilha.</div></div>`;
-  if (Math.abs(d.diferenca_boleto_segurados) > 0.009)
+  if (d.sem_horas.length)
+    avisos += `<div class="msg warn">${ICON.warn}<div>Sem horas na TS no mês (não rateados): ${d.sem_horas.join(", ")}</div></div>`;
+  if (d.proporcao_suspeita && d.proporcao_suspeita.length)
+    avisos += `<div class="msg warn">${ICON.warn}<div>Proporções da TS não somam 100% no mês para: ${d.proporcao_suspeita.map((x) => `${x.nome} (${(x.soma * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%)`).join(", ")}. A distribuição entre GPs pode estar distorcida — verifique a planilha.</div></div>`;
+  if (d.tipo === "plano_saude" && Math.abs(d.diferenca_boleto_segurados) > 0.009)
     avisos += `<div class="msg warn">${ICON.warn}<div>Boleto e soma dos segurados diferem em ${fmtBRL(d.diferenca_boleto_segurados)}. O VALOR FINAL foi rateado pelo valor do boleto.</div></div>`;
-  avisos += `<div class="msg ok">${ICON.check}<div>Rateio gerado: ${d.qtd_gps} GP(s), ${d.qtd_segurados} segurado(s).</div></div>`;
+  avisos += `<div class="msg ok">${ICON.check}<div>Rateio gerado: ${d.qtd_gps} GP(s), ${qtdPessoas} ${rotulo}(s).</div></div>`;
   $("#result-msgs").innerHTML = avisos;
 
   let html = `<thead><tr><th>GP</th><th class="num">Horas</th><th class="num">Valor</th><th class="num">Proporção</th><th class="num">Valor Final</th></tr></thead><tbody>`;
@@ -191,9 +232,9 @@ function mostrarResultado(d) {
 
 $("#btn-download").onclick = () => {
   if (!ULTIMO) return;
-  const wb = C.montarWorkbook(ULTIMO.res, ULTIMO.meta);
-  const nome = C.nomeArquivoSaida(ULTIMO.res.mes_key, ULTIMO.meta.seguradora, ULTIMO.meta.codigo_boleto);
-  C.XLSX.writeFile(wb, nome);
+  const exp = C.prepararExport(ULTIMO.res, ULTIMO.extra);
+  const wb = C.montarWorkbook(ULTIMO.res, exp);
+  C.XLSX.writeFile(wb, exp.nomeArquivo);
 };
 
 addSeg();
