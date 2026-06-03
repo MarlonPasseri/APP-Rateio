@@ -225,9 +225,11 @@ function mostrarResultado(d) {
   });
   html += `</tbody><tfoot><tr class="total"><td>TOTAL</td><td class="num">${fmtNum(tH)}</td><td class="num">${fmtBRL(tV)}</td><td class="num">${fmtPct(tP)}</td><td class="num">${fmtBRL(tF)}</td></tr></tfoot>`;
   $("#tabela-final").innerHTML = html;
-  $("#card-result").style.display = "block";
+  const cr = $("#card-result");
+  cr.classList.remove("hidden");
+  cr.classList.add("in");
   setStep(5);
-  $("#card-result").scrollIntoView({ behavior: "smooth", block: "start" });
+  cr.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 $("#btn-download").onclick = () => {

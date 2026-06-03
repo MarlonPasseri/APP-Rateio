@@ -7,6 +7,8 @@
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
+.hidden{display:none}
+.self-end{align-self:end}
 body{margin:0;background:var(--bg);color:var(--fg);
   font-family:"Source Sans 3",system-ui,"Segoe UI",Arial,sans-serif;font-size:15px;line-height:1.5}
 h1,h2,h3,.num{font-family:"Lexend",system-ui,"Segoe UI",Arial,sans-serif}

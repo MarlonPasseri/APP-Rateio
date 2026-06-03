@@ -26,15 +26,6 @@
   }, { threshold: 0, rootMargin: "0px 0px -5% 0px" });
   reveals.forEach((el) => io.observe(el));
 
-  // Garante que o card de resultado apareça mesmo que já esteja na viewport
-  // quando passa de display:none para visível.
-  const cardResult = document.getElementById("card-result");
-  if (cardResult) {
-    new MutationObserver(() => {
-      if (cardResult.style.display !== "none") cardResult.classList.add("in");
-    }).observe(cardResult, { attributes: true, attributeFilter: ["style"] });
-  }
-
   // ---- Parallax dos blobs e do cabeçalho ----
   const blobs = [...document.querySelectorAll(".bg .blob")];
   const speeds = [0.12, -0.08, 0.06];

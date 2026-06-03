@@ -11,14 +11,13 @@
            img-src 'self' data:;
            connect-src 'none';
            base-uri 'none';
-           form-action 'none';
-           frame-ancestors 'none'" />
+           form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <title>Rateio por GP</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600;700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 <div class="bg" aria-hidden="true">
@@ -88,7 +87,7 @@
     </div>
     <div class="grid">
       <div><label for="arquivo">Arquivo (.xlsx)</label><input type="file" id="arquivo" accept=".xlsx,.xlsm" /></div>
-      <div style="align-self:end">
+      <div class="self-end">
         <button class="btn" id="btn-upload">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
           Carregar
@@ -145,7 +144,7 @@
   </div>
 
   <!-- Etapa 5: resultado -->
-  <div class="card" id="card-result" data-reveal style="display:none">
+  <div class="card hidden" id="card-result" data-reveal>
     <div class="card-head">
       <div class="card-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg></div>
       <div><h2>Resultado do rateio</h2><p class="sub">Valor final distribuído por GP</p></div>
@@ -164,7 +163,7 @@
   integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
   crossorigin="anonymous"></script>
 <script src="core.js?v=2"></script>
-<script src="app.js?v=2"></script>
-<script src="animations.js?v=2"></script>
+<script src="app.js?v=3"></script>
+<script src="animations.js?v=3"></script>
 </body>
 </html>
