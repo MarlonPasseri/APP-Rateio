@@ -1,0 +1,9 @@
+{
+  "name": "rateio-por-gp",
+  "version": "1.0.0",
+  "description": "Rateio de custos por GP (Centro de Custo) — versão navegador.",
+  "private": true,
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\""
+  }
+}

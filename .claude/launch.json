@@ -2,12 +2,6 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "rateio",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["app.py"],
-      "port": 5000
-    },
-    {
       "name": "rateio-pages",
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "5500", "-d", "docs"],

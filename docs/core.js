@@ -1,0 +1,290 @@
+/* Núcleo de cálculo do Rateio por GP — domínio puro + leitura/escrita de .xlsx.
+ *
+ * Arquitetura: este módulo NÃO conhece o DOM. Toda a lógica testável vive aqui.
+ * A interface (app.js) e os testes (tests/) consomem a API exportada abaixo.
+ *
+ * UMD: no navegador expõe `window.RateioCore` (usando o XLSX global já carregado);
+ * no Node é importável via `require('./core.js')` (carrega o SheetJS vendorizado).
+ */
+(function (root, factory) {
+  "use strict";
+  if (typeof module === "object" && module.exports) {
+    module.exports = factory(require("./vendor/xlsx.full.min.js"));
+  } else {
+    root.RateioCore = factory(root.XLSX);
+  }
+})(typeof self !== "undefined" ? self : this, function (XLSX) {
+  "use strict";
+
+  // ---- Configuração de colunas da planilha TS ----
+  const COLUNAS = {
+    id: ["id colaborador", "id do colaborador", "id colab", "matricula"],
+    nome: ["nome colaborador", "nome do colaborador", "colaborador", "nome"],
+    mes: ["mes", "mes referencia", "competencia", "mes/ano"],
+    gp: ["gp", "centro de custo", "cc", "numero gp"],
+    horas: ["horas trabalhadas", "horas trab", "horas"],
+    proporcao: ["proporcao de hora", "proporcao da hora", "proporcao das horas", "proporcao"],
+  };
+  const OBRIGATORIAS = ["nome", "mes", "gp", "horas", "proporcao"];
+
+  // ---- Utilitários puros ----
+  function norm(t) {
+    if (t === null || t === undefined) return "";
+    let s = String(t).trim().toLowerCase();
+    s = s.normalize("NFKD").replace(/[̀-ͯ]/g, "");
+    return s.replace(/\s+/g, " ");
+  }
+
+  function mesKey(v) {
+    if (v === null || v === undefined || v === "") return null;
+    if (v instanceof Date && !isNaN(v)) {
+      return `${v.getFullYear().toString().padStart(4, "0")}-${(v.getMonth() + 1).toString().padStart(2, "0")}`;
+    }
+    const s = String(v).trim();
+    let m = s.match(/^(\d{4})[-/](\d{1,2})/);
+    if (m) return `${(+m[1]).toString().padStart(4, "0")}-${(+m[2]).toString().padStart(2, "0")}`;
+    m = s.match(/^(\d{1,2})[-/](\d{4})/);
+    if (m) return `${(+m[2]).toString().padStart(4, "0")}-${(+m[1]).toString().padStart(2, "0")}`;
+    return null;
+  }
+
+  function toFloat(v) {
+    if (v === null || v === undefined || v === "") return 0;
+    if (typeof v === "number") return isFinite(v) ? v : 0;
+    let s = String(v).trim().replace(/R\$/g, "").replace(/\s/g, "");
+    if (s.includes(",") && s.includes(".")) s = s.replace(/\./g, "").replace(",", ".");
+    else if (s.includes(",")) s = s.replace(",", ".");
+    const n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function round(n, d) {
+    const f = 10 ** d;
+    return Math.round((n + Number.EPSILON) * f) / f;
+  }
+
+  function sanitizar(s) {
+    return String(s).replace(/[\\/:*?"<>|]+/g, "_").trim();
+  }
+
+  function nomeArquivoSaida(mk, seguradora, codigo) {
+    const [ano, mes] = mk.split("-");
+    return `${ano.slice(2)}-${mes}-${sanitizar(seguradora)}-${sanitizar(codigo)}.xlsx`;
+  }
+
+  // ---- Leitura da planilha TS ----
+  function carregarTS(workbook) {
+    if (!workbook || !Array.isArray(workbook.SheetNames)) {
+      throw new Error("Arquivo inválido ou não é uma planilha.");
+    }
+    for (const nomeAba of workbook.SheetNames) {
+      const ws = workbook.Sheets[nomeAba];
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: false });
+      let linhaCab = -1, mapa = null;
+      for (let i = 0; i < Math.min(15, aoa.length); i++) {
+        const normalizados = {};
+        aoa[i].forEach((c, idx) => { if (c !== null && c !== undefined) normalizados[norm(c)] = idx; });
+        const m = {};
+        for (const [logico, sin] of Object.entries(COLUNAS)) {
+          for (const s of sin) if (s in normalizados) { m[logico] = normalizados[s]; break; }
+        }
+        if (OBRIGATORIAS.every((c) => c in m)) { linhaCab = i; mapa = m; break; }
+      }
+      if (linhaCab < 0) continue;
+
+      const linhas = [];
+      for (let r = linhaCab + 1; r < aoa.length; r++) {
+        const row = aoa[r];
+        const get = (col) => { const i = mapa[col]; return (i !== undefined && i < row.length) ? row[i] : null; };
+        const nome = get("nome"), gp = get("gp"), mk = mesKey(get("mes"));
+        if (nome === null && gp === null && mk === null) continue;
+        if (mk === null || gp === null) continue;
+        const id = get("id");
+        linhas.push({
+          id: id !== null && id !== undefined ? String(id).trim() : "",
+          nome: nome !== null && nome !== undefined ? String(nome).trim() : "",
+          mes_key: mk,
+          gp: gp,
+          horas: toFloat(get("horas")),
+          proporcao: toFloat(get("proporcao")),
+        });
+      }
+      if (linhas.length) {
+        const meses = [...new Set(linhas.map((l) => l.mes_key))].sort();
+        return { linhas, aba: nomeAba, meses };
+      }
+    }
+    throw new Error(
+      "Não encontrei uma aba com as colunas da planilha TS " +
+      "(Nome Colaborador, Mês, GP, Horas Trabalhadas e Proporção de Hora)."
+    );
+  }
+
+  function colaboradores(ts, mk) {
+    const vistos = new Map();
+    for (const l of ts.linhas) {
+      if (l.mes_key !== mk) continue;
+      const chave = l.id || l.nome;
+      if (!vistos.has(chave)) vistos.set(chave, { id: l.id, nome: l.nome });
+    }
+    return [...vistos.values()].sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR"));
+  }
+
+  // ---- Validação de entrada (independente da UI) ----
+  function validarEntrada(d) {
+    const erros = [];
+    if (!d || typeof d !== "object") return { ok: false, erros: ["Dados de entrada ausentes."] };
+    if (!d.mes) erros.push("Selecione o mês de referência.");
+    if (!d.seguradora || !String(d.seguradora).trim()) erros.push("Informe a seguradora.");
+    if (!d.codigo_boleto || !String(d.codigo_boleto).trim()) erros.push("Informe o código do boleto.");
+    const vb = Number(d.valor_boleto);
+    if (!isFinite(vb) || vb <= 0) erros.push("O valor do boleto deve ser maior que zero.");
+
+    const segs = Array.isArray(d.segurados) ? d.segurados : [];
+    if (!segs.length) erros.push("Adicione ao menos um segurado.");
+
+    const chaves = new Set(), dups = new Set();
+    let somaSeg = 0;
+    for (const s of segs) {
+      const v = toFloat(s.valor);
+      somaSeg += v;
+      if (v < 0) erros.push(`Valor negativo informado para "${s.nome || "segurado"}".`);
+      const chave = String(s.id || "").trim() || norm(s.nome || "");
+      if (chave) {
+        if (chaves.has(chave)) dups.add(s.nome || chave);
+        else chaves.add(chave);
+      }
+    }
+    if (dups.size) erros.push(`Segurado(s) repetido(s): ${[...dups].join(", ")}.`);
+    if (segs.length && somaSeg <= 0) erros.push("Informe o valor de pelo menos um segurado.");
+
+    return { ok: erros.length === 0, erros };
+  }
+
+  // ---- Cálculo do rateio de Plano de Saúde ----
+  function calcularPlanoSaude(ts, mk, segurados, valorBoleto) {
+    valorBoleto = Number(valorBoleto);
+    const porId = new Map(), porNome = new Map();
+    let totalSegurados = 0;
+    for (const s of segurados) {
+      const v = toFloat(s.valor);
+      totalSegurados += v;
+      if (s.id) porId.set(String(s.id).trim(), v);
+      if (s.nome) porNome.set(norm(s.nome), v);
+    }
+    const valorDoSegurado = (l) => {
+      if (l.id && porId.has(l.id)) return porId.get(l.id);
+      const n = norm(l.nome);
+      if (porNome.has(n)) return porNome.get(n);
+      return null;
+    };
+
+    const temp2 = [];
+    const comHoras = new Set();
+    for (const l of ts.linhas) {
+      if (l.mes_key !== mk) continue;
+      const v = valorDoSegurado(l);
+      if (v === null) continue;
+      comHoras.add(l.id || norm(l.nome));
+      temp2.push({
+        id: l.id, nome: l.nome, gp: l.gp, horas: l.horas, proporcao: l.proporcao,
+        valor_segurado: v, valor_linha: v * l.proporcao,
+      });
+    }
+
+    const valorPorGp = new Map(), horasPorGp = new Map();
+    for (const r of temp2) {
+      valorPorGp.set(r.gp, (valorPorGp.get(r.gp) || 0) + r.valor_linha);
+      horasPorGp.set(r.gp, (horasPorGp.get(r.gp) || 0) + r.horas);
+    }
+    const totalValor = [...valorPorGp.values()].reduce((a, b) => a + b, 0);
+
+    const gps = [...valorPorGp.keys()].sort((a, b) =>
+      (typeof a === typeof b) ? (a > b ? 1 : a < b ? -1 : 0) : String(a).localeCompare(String(b)));
+    const tabelaFinal = gps.map((gp) => {
+      const valor = valorPorGp.get(gp);
+      const prop = totalValor ? valor / totalValor : 0;
+      return {
+        gp, horas: round(horasPorGp.get(gp) || 0, 4),
+        valor: round(valor, 2), proporcao: prop, valor_final: round(valorBoleto * prop, 2),
+      };
+    });
+
+    // ajuste de centavos: garante soma do VALOR FINAL == valor do boleto
+    const somaFinal = tabelaFinal.reduce((a, r) => a + r.valor_final, 0);
+    const dif = round(valorBoleto - somaFinal, 2);
+    if (tabelaFinal.length && dif !== 0) {
+      let maior = tabelaFinal[0];
+      for (const r of tabelaFinal) if (r.valor_final > maior.valor_final) maior = r;
+      maior.valor_final = round(maior.valor_final + dif, 2);
+    }
+
+    const semHoras = segurados
+      .filter((s) => !comHoras.has(String(s.id || "").trim() || norm(s.nome || "")))
+      .map((s) => s.nome);
+
+    return {
+      mes_key: mk,
+      valor_boleto: round(valorBoleto, 2),
+      total_segurados: round(totalSegurados, 2),
+      total_valor_rateado: round(totalValor, 2),
+      diferenca_boleto_segurados: round(valorBoleto - totalSegurados, 2),
+      qtd_gps: tabelaFinal.length,
+      qtd_segurados: segurados.length,
+      segurados_sem_horas: semHoras,
+      temp2, tabela_final: tabelaFinal,
+    };
+  }
+
+  // ---- Montagem do workbook de saída (puro; download fica na UI) ----
+  function montarWorkbook(res, meta) {
+    const wb = XLSX.utils.book_new();
+    const tf = res.tabela_final;
+
+    const aoa = [
+      ["Rateio de Plano de Saúde por GP"],
+      ["Seguradora", meta.seguradora],
+      ["Código do boleto", meta.codigo_boleto],
+      ["Mês", res.mes_key],
+      ["Valor do boleto", res.valor_boleto],
+      ["Soma dos segurados", res.total_segurados],
+      [],
+      ["GP", "HORAS", "VALOR", "PROPORÇÃO", "VALOR FINAL"],
+    ];
+    tf.forEach((r) => aoa.push([r.gp, r.horas, r.valor, r.proporcao, r.valor_final]));
+    aoa.push([
+      "TOTAL",
+      round(tf.reduce((a, r) => a + r.horas, 0), 4),
+      round(tf.reduce((a, r) => a + r.valor, 0), 2),
+      round(tf.reduce((a, r) => a + r.proporcao, 0), 6),
+      round(tf.reduce((a, r) => a + r.valor_final, 0), 2),
+    ]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 16 }];
+    const fmt = (r, c, z) => { const ref = XLSX.utils.encode_cell({ r, c }); if (ws[ref]) ws[ref].z = z; };
+    fmt(4, 1, "#,##0.00");
+    fmt(5, 1, "#,##0.00");
+    const fim = 8 + tf.length;
+    for (let r = 8; r <= fim; r++) { fmt(r, 2, "#,##0.00"); fmt(r, 3, "0.0000%"); fmt(r, 4, "#,##0.00"); }
+    XLSX.utils.book_append_sheet(wb, ws, "Rateio");
+
+    const aoa2 = [[
+      "Id Colaborador", "Nome Colaborador", "GP", "Horas Trabalhadas",
+      "Proporção de Hora", "Valor Segurado", "Valor Rateado (Valor×Prop.)",
+    ]];
+    res.temp2.forEach((r) =>
+      aoa2.push([r.id, r.nome, r.gp, r.horas, r.proporcao, round(r.valor_segurado, 2), round(r.valor_linha, 2)]));
+    const ws2 = XLSX.utils.aoa_to_sheet(aoa2);
+    ws2["!cols"] = [{ wch: 16 }, { wch: 28 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 14 }, { wch: 22 }];
+    XLSX.utils.book_append_sheet(wb, ws2, "Detalhe_Segurados");
+
+    return wb;
+  }
+
+  return {
+    XLSX, COLUNAS, OBRIGATORIAS,
+    norm, mesKey, toFloat, round, sanitizar, nomeArquivoSaida,
+    carregarTS, colaboradores, validarEntrada, calcularPlanoSaude, montarWorkbook,
+  };
+});
