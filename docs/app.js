@@ -246,11 +246,7 @@ function atualizarResumoTS() {
 }
 
 function encontrarColab(pessoa) {
-  const id = normalizarId(pessoa.id);
-  const nome = C.norm(pessoa.nome || "");
-  return COLABS.find((c) => id && normalizarId(c.id) === id)
-    || COLABS.find((c) => C.norm(c.nome || "") === nome)
-    || null;
+  return C.encontrarColaborador(COLABS, pessoa);
 }
 
 function salvarValoresMes() {

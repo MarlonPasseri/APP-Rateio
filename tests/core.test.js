@@ -174,6 +174,50 @@ test("parseBoletoSulAmerica extrai dados gerais e total por família", () => {
   assert.equal(boleto.total_familias, 1598.94);
 });
 
+const TEXTO_BOLETO_BRADESCO = `
+SPG/Grupos Especiais BRADESCO SAUDE - FATURA TECNICA
+Cia Suc Apol.(s) Cob Fatura M/A nr Estipulante EMPRESA EXEMPLO LTDA Ramo Data Emissao Pag.
+571 605 0690060 MEDICA 01/2025 01 Subfatura 0001 - EMPRESA EXEMPLO LTDA 876 - MULTI SAUDE EMPRESA 16/12/2024 1
+(TS)TOTAIS DA SUBFATURA 2 3 5 5 5.000,00 0,00
+Seguradora CNPJ Proposta Prest. Cont. Vencimento
+BRADESCO SAUDE S/A 092.693.118/0001-60 020456 01/01 17-03 16/01/2025
+Data Emissao No Apolice End./Fatura Informacoes Complementares
+16/12/2024 6050690060 605054269 SF0001
+Inicio de Vigencia Nome do Segurado
+DE 16.01.2025 A 15.02.2025 EMPRESA EXEMPLO LTDA
+Moeda Premio Total Nome do Corretor
+R$ ********5.120,00 CORRETORA EXEMPLO
+0000100/00 ANA TESTE ALVES 01/05/1980 FEM CAS TNQQ 16/03/2020 01/2025 1.000,00 0,00
+0000100/01 DEPENDENTE UM ALVES 14/10/1981 MAS CAS CONJ TNQQ 16/03/2020 01/2025 800,00 0,00
+0000100/02 DEPENDENTE DOIS ALVES 13/06/2010 FEM SOLT FILH TNQQ 16/03/2020 01/2025 400,00 0,00
+571 605 0690060 MEDICA 01/2025 01 Subfatura 0002 - FILIAL EXEMPLO 876 - MULTI SAUDE EMPRESA 16/12/2024 2
+0000200/00 BRUNO EXEMPLO COSTA 22/05/1975 MAS CAS TNQQ 16/03/2020 01/2025 1.500,00 0,00
+0000200/01 DEPENDENTE EXEMPLO COSTA 22/05/1976 FEM CAS CONJ TNQQ 16/03/2020 01/2025 1.300,00 0,00
+`;
+
+test("parseBoletoBradesco agrupa dependentes por certificado e extrai o boleto", () => {
+  const boleto = C.parseBoletoBradesco(TEXTO_BOLETO_BRADESCO);
+  assert.equal(boleto.seguradora, "Bradesco Saúde");
+  assert.equal(boleto.codigo_boleto, "605054269");
+  assert.equal(boleto.contrato, "6050690060");
+  assert.equal(boleto.empresa, "EMPRESA EXEMPLO LTDA");
+  assert.equal(boleto.mes, "2025-01");
+  assert.equal(boleto.vencimento, "16/01/2025");
+  assert.equal(boleto.valor_boleto, 5120);
+  assert.equal(boleto.qtd_segurados, 5);
+  assert.deepEqual(boleto.pessoas, [
+    { id: "CERT-0000100", nome: "ANA TESTE ALVES", cpf: "", valor: 2200 },
+    { id: "CERT-0000200", nome: "BRUNO EXEMPLO COSTA", cpf: "", valor: 2800 },
+  ]);
+  assert.equal(boleto.total_familias, 5000);
+});
+
+test("parseBoletoPdfText reconhece automaticamente fatura técnica Bradesco", () => {
+  const boleto = C.parseBoletoPdfText(TEXTO_BOLETO_BRADESCO);
+  assert.equal(boleto.seguradora, "Bradesco Saúde");
+  assert.equal(boleto.pessoas.length, 2);
+});
+
 test("parseBoletoPdfText rejeita layouts ainda não suportados", () => {
   assert.throws(() => C.parseBoletoPdfText("boleto desconhecido"), /não reconheço/i);
 });
@@ -217,6 +261,43 @@ test("colaboradores retorna distintos do mês, ordenados", () => {
   const jan = C.colaboradores(ts, "2025-01").map((c) => c.nome);
   assert.deepEqual(jan, ["Ana Lima", "Bruno Sá", "Carla Reis"]);
   assert.deepEqual(C.colaboradores(ts, "2025-02").map((c) => c.nome), ["Davi Nunes"]);
+});
+
+test("encontrarColaborador aceita ID sem zeros à esquerda e nome exato", () => {
+  const lista = [
+    { id: "123", nome: "Ana Lima" },
+    { id: "COL002", nome: "Bruno Sá" },
+  ];
+  assert.equal(C.encontrarColaborador(lista, { id: "000123", nome: "Outro" }), lista[0]);
+  assert.equal(C.encontrarColaborador(lista, { nome: "BRUNO SA" }), lista[1]);
+});
+
+test("encontrarColaborador associa nome completo a abreviação única", () => {
+  const lista = [
+    { id: "COL001", nome: "Armando Neto" },
+    { id: "COL002", nome: "Marlon Filho" },
+    { id: "COL003", nome: "Marlon Mello" },
+  ];
+  assert.equal(
+    C.encontrarColaborador(lista, { nome: "ARMANDO JOSE DA SILVA NETO" }),
+    lista[0]
+  );
+  assert.equal(
+    C.encontrarColaborador(lista, { nome: "MARLON PASSERI MELLO" }),
+    lista[2]
+  );
+});
+
+test("encontrarColaborador não escolhe associação abreviada ambígua", () => {
+  const lista = [
+    { id: "COL001", nome: "Maria Silva" },
+    { id: "COL002", nome: "Maria Silva Souza" },
+  ];
+  assert.equal(
+    C.encontrarColaborador(lista, { nome: "MARIA APARECIDA SILVA SOUZA" }),
+    null
+  );
+  assert.equal(C.encontrarColaborador(lista, { nome: "Maria" }), null);
 });
 
 // ---------------------------------------------------------------- validarEntrada

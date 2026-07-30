@@ -135,6 +135,43 @@
     return [...vistos.values()].sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR"));
   }
 
+  function encontrarColaborador(lista, pessoa) {
+    const colaboradores = Array.isArray(lista) ? lista : [];
+    const id = String(pessoa?.id || "").trim().replace(/^0+(?=\d)/, "");
+    const nome = norm(pessoa?.nome || "");
+
+    const porId = colaboradores.find((colaborador) => {
+      const idColaborador = String(colaborador.id || "").trim().replace(/^0+(?=\d)/, "");
+      return id && idColaborador === id;
+    });
+    if (porId) return porId;
+
+    const porNome = colaboradores.find((colaborador) => norm(colaborador.nome || "") === nome);
+    if (porNome) return porNome;
+
+    const particulas = new Set(["da", "das", "de", "do", "dos", "e"]);
+    const tokens = (valor) => norm(valor)
+      .split(" ")
+      .filter((token) => token && !particulas.has(token));
+    const tokensPessoa = tokens(pessoa?.nome || "");
+    if (tokensPessoa.length < 2) return null;
+
+    const compativeis = colaboradores.filter((colaborador) => {
+      const tokensColaborador = tokens(colaborador.nome || "");
+      if (tokensColaborador.length < 2) return false;
+      const menor = tokensPessoa.length <= tokensColaborador.length
+        ? tokensPessoa
+        : tokensColaborador;
+      const maior = new Set(
+        tokensPessoa.length <= tokensColaborador.length
+          ? tokensColaborador
+          : tokensPessoa
+      );
+      return menor.every((token) => maior.has(token));
+    });
+    return compativeis.length === 1 ? compativeis[0] : null;
+  }
+
   // ---- Leitura de uma lista simples de pessoas/valores para preencher a UI ----
   function carregarPessoas(workbook) {
     if (!workbook || !Array.isArray(workbook.SheetNames)) {
@@ -270,8 +307,107 @@
     };
   }
 
+  function parseBoletoBradesco(texto) {
+    if (
+      typeof texto !== "string"
+      || !/BRADESCO\s+SA[UÚ]DE\s*-\s*FATURA\s+T[EÉ]CNICA/i.test(texto)
+    ) {
+      throw new Error("O PDF não foi reconhecido como uma fatura técnica da Bradesco Saúde.");
+    }
+
+    const limpo = texto
+      .replace(/\u00a0/g, " ")
+      .replace(/\r/g, "")
+      .replace(/[ \t]+/g, " ");
+
+    const competencia = limpo.match(
+      /\bM[EÉ]DICA\s+(\d{2}\/\d{4})\s+\d+\s+Subfatura\b/i
+    ) || limpo.match(
+      /Fatura\s+M\/A[\s\S]{0,250}?\b(\d{2}\/\d{4})\b/i
+    );
+    const mes = competencia ? mesKey(competencia[1]) : null;
+
+    const premio = limpo.match(
+      /Pr[eê]mio\s+Total[\s\S]{0,180}?\bR\$\s*\**\s*([\d.]+,\d{2})/i
+    ) || limpo.match(
+      /Valor\s+do\s+Documento[\s\S]{0,180}?\*+\s*([\d.]+,\d{2})/i
+    );
+    const apoliceFatura = limpo.match(/\b(\d{10})\s+(\d{9})\s+SF\d+\b/i);
+    const empresa = limpo.match(/Estipulante\s+([^\n]+?)\s+Ramo\b/i);
+    const vencimento = limpo.match(
+      /Vencimento[^\n]*\n[^\n]*?(\d{2}\/\d{2}\/\d{4})/i
+    );
+    const vigencia = limpo.match(
+      /In[ií]cio\s+de\s+Vig[eê]ncia[^\n]*\nDE\s+(\d{2}[./]\d{2}[./]\d{4})\s+A\s+(\d{2}[./]\d{2}[./]\d{4})/i
+    );
+
+    const familias = new Map();
+    let qtdSegurados = 0;
+    for (const linha of limpo.split("\n")) {
+      const registro = linha.trim().replace(/\s+/g, " ");
+      const item = registro.match(
+        /^(\d{6,10})\/(\d{2})\s+(.+?)\s+\d{2}\/\d{2}\/\d{4}\s+(?:MAS|FEM)\b.*?\b(\d{2}\/\d{4})\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})$/i
+      );
+      if (!item) continue;
+      if (mes && mesKey(item[4]) !== mes) continue;
+
+      const idFamilia = item[1];
+      const sufixo = item[2];
+      const nome = item[3].trim();
+      const valor = toFloat(item[5]);
+      const familia = familias.get(idFamilia) || {
+        id: idFamilia,
+        nome: "",
+        cpf: "",
+        valor: 0,
+      };
+      familia.valor += valor;
+      if (sufixo === "00") familia.nome = nome;
+      familias.set(idFamilia, familia);
+      qtdSegurados += 1;
+    }
+
+    const pessoas = [...familias.values()]
+      .filter((familia) => familia.nome)
+      .map((familia) => ({
+        id: `CERT-${familia.id}`,
+        nome: familia.nome,
+        cpf: "",
+        valor: round(familia.valor, 2),
+      }));
+    const totalFamilias = round(
+      pessoas.reduce((soma, pessoa) => soma + pessoa.valor, 0),
+      2
+    );
+
+    if (!premio || !mes || !pessoas.length) {
+      throw new Error(
+        "A fatura Bradesco Saúde foi reconhecida, mas não encontrei competência, valor total e famílias de segurados."
+      );
+    }
+
+    return {
+      seguradora: "Bradesco Saúde",
+      codigo_boleto: apoliceFatura?.[2] || "",
+      contrato: apoliceFatura?.[1] || "",
+      empresa: empresa?.[1]?.trim() || "",
+      competencia_inicio: vigencia?.[1]?.replace(/\./g, "/") || competencia[1],
+      competencia_fim: vigencia?.[2]?.replace(/\./g, "/") || "",
+      mes,
+      vencimento: vencimento?.[1] || "",
+      valor_boleto: toFloat(premio[1]),
+      pessoas,
+      total_familias: totalFamilias,
+      total_geral_relatorio: totalFamilias,
+      qtd_segurados: qtdSegurados,
+    };
+  }
+
   function parseBoletoPdfText(texto) {
     if (/SUL\s*AMERICA/i.test(String(texto || ""))) return parseBoletoSulAmerica(texto);
+    if (/BRADESCO\s+SA[UÚ]DE\s*-\s*FATURA\s+T[EÉ]CNICA/i.test(String(texto || ""))) {
+      return parseBoletoBradesco(texto);
+    }
     throw new Error("Ainda não reconheço o layout deste boleto.");
   }
 
@@ -592,8 +728,8 @@
   return {
     XLSX, COLUNAS, OBRIGATORIAS, COLUNAS_PESSOAS,
     norm, mesKey, toFloat, round, sanitizar, nomeArquivoSaida, nomeArquivoFerias,
-    carregarTS, colaboradores, carregarPessoas, parsePessoasColadas,
-    parseBoletoSulAmerica, parseBoletoPdfText, combinarBoletos,
+    carregarTS, colaboradores, encontrarColaborador, carregarPessoas, parsePessoasColadas,
+    parseBoletoSulAmerica, parseBoletoBradesco, parseBoletoPdfText, combinarBoletos,
     validarEntrada, validarFerias,
     calcularPlanoSaude, calcularFerias,
     prepararExport, montarWorkbook,

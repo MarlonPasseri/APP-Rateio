@@ -26,11 +26,17 @@ O arquivo baixado segue o padrão `AA-MM-Seguradora-codigo_boleto.xlsx`
 
 Depois de carregar a TS, use **Importar boleto(s)** nos dados do boleto. É
 possível selecionar vários PDFs de uma só vez, desde que pertençam à mesma
-competência. No layout atual da SulAmérica, o app extrai automaticamente:
+competência. O app reconhece os layouts atuais da **SulAmérica** e da
+**Bradesco Saúde - Fatura Técnica** e extrai automaticamente:
 
 - seguradora, número do documento, competência, vencimento e valor do boleto;
-- titulares, CPF, ID funcional e total de cada família;
+- titulares, identificador disponível no PDF e total de cada família;
 - mês correspondente na TS e valores de cada colaborador localizado.
+
+Na fatura técnica da Bradesco, os dependentes são agrupados pelo número do
+certificado e o registro terminado em `/00` identifica o titular. Nomes legais
+completos também podem ser associados a nomes abreviados da TS quando houver
+uma única correspondência segura.
 
 Ao selecionar vários boletos, o valor total é somado e titulares repetidos têm
 seus valores familiares acumulados antes do preenchimento da tabela.
