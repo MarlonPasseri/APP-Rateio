@@ -1,0 +1,2 @@
+# Keep vendored JavaScript bytes stable across Windows and Linux.
+docs/vendor/*.js text eol=lf
