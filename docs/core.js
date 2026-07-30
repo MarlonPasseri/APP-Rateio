@@ -26,6 +26,11 @@
     proporcao: ["proporcao de hora", "proporcao da hora", "proporcao das horas", "proporcao"],
   };
   const OBRIGATORIAS = ["nome", "mes", "gp", "horas", "proporcao"];
+  const COLUNAS_PESSOAS = {
+    id: ["id colaborador", "id do colaborador", "id colab", "matricula", "id"],
+    nome: ["nome colaborador", "nome do colaborador", "colaborador", "funcionario", "segurado", "nome"],
+    valor: ["valor", "valor segurado", "valor funcionario", "valor ferias", "valor plano", "mensalidade"],
+  };
 
   // ---- Utilitários puros ----
   function norm(t) {
@@ -128,6 +133,208 @@
       if (!vistos.has(chave)) vistos.set(chave, { id: l.id, nome: l.nome });
     }
     return [...vistos.values()].sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR"));
+  }
+
+  // ---- Leitura de uma lista simples de pessoas/valores para preencher a UI ----
+  function carregarPessoas(workbook) {
+    if (!workbook || !Array.isArray(workbook.SheetNames)) {
+      throw new Error("Arquivo inválido ou não é uma planilha/lista.");
+    }
+    for (const nomeAba of workbook.SheetNames) {
+      const ws = workbook.Sheets[nomeAba];
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: false });
+      let linhaCab = -1, mapa = null;
+      for (let i = 0; i < Math.min(10, aoa.length); i++) {
+        const normalizados = {};
+        aoa[i].forEach((c, idx) => { if (c !== null && c !== undefined) normalizados[norm(c)] = idx; });
+        const m = {};
+        for (const [logico, sin] of Object.entries(COLUNAS_PESSOAS)) {
+          for (const s of sin) if (s in normalizados) { m[logico] = normalizados[s]; break; }
+        }
+        if ("nome" in m && "valor" in m) { linhaCab = i; mapa = m; break; }
+      }
+      if (linhaCab < 0) continue;
+
+      const pessoas = [];
+      for (let r = linhaCab + 1; r < aoa.length; r++) {
+        const row = aoa[r];
+        const get = (col) => { const i = mapa[col]; return (i !== undefined && i < row.length) ? row[i] : null; };
+        const nome = get("nome");
+        const valor = toFloat(get("valor"));
+        if ((nome === null || nome === undefined || String(nome).trim() === "") && valor === 0) continue;
+        if (nome === null || nome === undefined || String(nome).trim() === "") continue;
+        const id = get("id");
+        pessoas.push({
+          id: id !== null && id !== undefined ? String(id).trim() : "",
+          nome: String(nome).trim(),
+          valor,
+        });
+      }
+      if (pessoas.length) return { pessoas, aba: nomeAba };
+    }
+    throw new Error("Não encontrei colunas de Nome e Valor na lista importada.");
+  }
+
+  // Lê duas colunas copiadas de uma planilha: identificador/nome e valor.
+  function parsePessoasColadas(texto) {
+    if (typeof texto !== "string" || !texto.trim()) return [];
+    const itens = [];
+    for (const linha of texto.split(/\r?\n/)) {
+      if (!linha.trim()) continue;
+      const colunas = linha.includes("\t") ? linha.split("\t") : linha.split(";");
+      if (colunas.length < 2) continue;
+      const chave = String(colunas[0] || "").trim();
+      const valorBruto = String(colunas[colunas.length - 1] || "").trim();
+      if (!chave || !/\d/.test(valorBruto)) continue;
+      itens.push({ chave, valor: toFloat(valorBruto) });
+    }
+    return itens;
+  }
+
+  function parseBoletoSulAmerica(texto) {
+    if (typeof texto !== "string" || !/SUL\s*AMERICA/i.test(texto)) {
+      throw new Error("O PDF não foi reconhecido como uma fatura da SulAmérica.");
+    }
+    const limpo = texto
+      .replace(/\u00a0/g, " ")
+      .replace(/\r/g, "")
+      .replace(/[ \t]+/g, " ");
+
+    const competencia = limpo.match(
+      /Compet[eê]ncia:\s*(\d{2}\/\d{2}\/\d{4})\s+(?:A|a)\s+(\d{2}\/\d{2}\/\d{4})/i
+    );
+    const fimCompetencia = competencia?.[2] || "";
+    const partesFim = fimCompetencia.split("/");
+    const mes = partesFim.length === 3 ? `${partesFim[2]}-${partesFim[1]}` : "";
+
+    const valor = limpo.match(/VALOR TOTAL:\s*(?:R\$\s*)?([\d.]+,\d{2})/i);
+    const vencimento = limpo.match(/Vencimento[^\d\n]*(?:\n[^\n]*)?(\d{2}\/\d{2}\/\d{4})/i);
+    const documento = limpo.match(
+      /N[úu]mero do Documento[^\n]*\n[^\n]*?\b(\d{10,})\b/i
+    ) || limpo.match(/\b(75777\d{9})\b/);
+    const contrato = limpo.match(/Empresa:\s*([0-9]+-[A-Z0-9-]+)/i)
+      || limpo.match(/Pagador:\s*\n?\s*([A-Z0-9]+)\s*-/i);
+    const empresa = limpo.match(/Raz[aã]o Social:\s*([^\n]+)/i)
+      || limpo.match(/Pagador:\s*\n?\s*[A-Z0-9]+\s*-\s*([^\n]+)/i);
+
+    const pessoas = [];
+    const totalFamilia = /Total da Fam[ií]lia:\s*R\$\s*([\d.]+,\d{2})/gi;
+    let inicioSegmento = 0;
+    let totalMatch;
+    while ((totalMatch = totalFamilia.exec(limpo)) !== null) {
+      const segmento = limpo.slice(inicioSegmento, totalMatch.index);
+      const titular = /(\d{17})\s+(.+?)\s+(\d{3}\.\d{3}\.\d{3}-\d{2})\s+(\d{6,})\s+\d{2}\/\d{2}\/\d{4}\s+\d{1,3}\s+TITULAR\b/gi;
+      let titularMatch;
+      let ultimoTitular = null;
+      while ((titularMatch = titular.exec(segmento)) !== null) ultimoTitular = titularMatch;
+
+      if (ultimoTitular) {
+        const nome = ultimoTitular[2]
+          .replace(/^\d{5}-[A-ZÀ-Ý]+(?:\s+\d+)?\s+/i, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        pessoas.push({
+          id: ultimoTitular[4],
+          nome,
+          cpf: ultimoTitular[3],
+          valor: toFloat(totalMatch[1]),
+        });
+      }
+      inicioSegmento = totalFamilia.lastIndex;
+    }
+
+    const totalGeral = limpo.match(/Total Geral:\s*R\$\s*([\d.]+,\d{2})/i);
+    const qtdSegurados = limpo.match(/Total de Segurados:\s*(\d+)/i);
+    const totalFamilias = round(pessoas.reduce((soma, pessoa) => soma + pessoa.valor, 0), 2);
+
+    if (!valor || !mes || !pessoas.length) {
+      throw new Error(
+        "A fatura SulAmérica foi reconhecida, mas não encontrei competência, valor total e famílias de segurados."
+      );
+    }
+
+    return {
+      seguradora: "SulAmérica",
+      codigo_boleto: documento?.[1] || contrato?.[1] || "",
+      contrato: contrato?.[1] || "",
+      empresa: empresa?.[1]?.trim() || "",
+      competencia_inicio: competencia?.[1] || "",
+      competencia_fim: fimCompetencia,
+      mes,
+      vencimento: vencimento?.[1] || "",
+      valor_boleto: toFloat(valor[1]),
+      pessoas,
+      total_familias: totalFamilias,
+      total_geral_relatorio: totalGeral ? toFloat(totalGeral[1]) : totalFamilias,
+      qtd_segurados: qtdSegurados ? Number(qtdSegurados[1]) : null,
+    };
+  }
+
+  function parseBoletoPdfText(texto) {
+    if (/SUL\s*AMERICA/i.test(String(texto || ""))) return parseBoletoSulAmerica(texto);
+    throw new Error("Ainda não reconheço o layout deste boleto.");
+  }
+
+  function combinarBoletos(lista) {
+    const boletos = Array.isArray(lista) ? lista.filter(Boolean) : [];
+    if (!boletos.length) throw new Error("Selecione ao menos um boleto em PDF.");
+
+    const meses = [...new Set(boletos.map((boleto) => boleto.mes).filter(Boolean))];
+    if (meses.length !== 1 || boletos.some((boleto) => !boleto.mes)) {
+      throw new Error("Todos os boletos precisam ter a mesma competência.");
+    }
+
+    const valoresUnicos = (campo) => [...new Set(
+      boletos.map((boleto) => String(boleto[campo] || "").trim()).filter(Boolean)
+    )];
+    const pessoasPorChave = new Map();
+
+    boletos.forEach((boleto) => {
+      (boleto.pessoas || []).forEach((pessoa) => {
+        const id = String(pessoa.id || "").trim();
+        const idNormalizado = id.replace(/^0+(?=\d)/, "");
+        const cpf = String(pessoa.cpf || "").replace(/\D/g, "");
+        const chave = idNormalizado
+          ? `id:${idNormalizado}`
+          : cpf
+            ? `cpf:${cpf}`
+            : `nome:${norm(pessoa.nome || "")}`;
+        if (!chave || chave === "nome:") return;
+
+        const existente = pessoasPorChave.get(chave);
+        if (existente) {
+          existente.valor = round(existente.valor + toFloat(pessoa.valor), 2);
+          return;
+        }
+        pessoasPorChave.set(chave, {
+          id,
+          nome: String(pessoa.nome || "").trim(),
+          cpf: String(pessoa.cpf || "").trim(),
+          valor: round(toFloat(pessoa.valor), 2),
+        });
+      });
+    });
+
+    const pessoas = [...pessoasPorChave.values()];
+    return {
+      seguradora: valoresUnicos("seguradora").join(" + "),
+      codigo_boleto: valoresUnicos("codigo_boleto").join(" + "),
+      contrato: valoresUnicos("contrato").join(" + "),
+      empresa: valoresUnicos("empresa").join(" + "),
+      competencia_inicio: valoresUnicos("competencia_inicio").join(", "),
+      competencia_fim: valoresUnicos("competencia_fim").join(", "),
+      mes: meses[0],
+      vencimento: valoresUnicos("vencimento").join(", "),
+      valor_boleto: round(boletos.reduce((soma, boleto) => soma + toFloat(boleto.valor_boleto), 0), 2),
+      pessoas,
+      total_familias: round(pessoas.reduce((soma, pessoa) => soma + pessoa.valor, 0), 2),
+      total_geral_relatorio: round(
+        boletos.reduce((soma, boleto) => soma + toFloat(boleto.total_geral_relatorio), 0),
+        2
+      ),
+      qtd_segurados: boletos.reduce((soma, boleto) => soma + (Number(boleto.qtd_segurados) || 0), 0),
+      quantidade_boletos: boletos.length,
+    };
   }
 
   // ---- Validação de entrada (independente da UI) ----
@@ -383,9 +590,10 @@
   }
 
   return {
-    XLSX, COLUNAS, OBRIGATORIAS,
+    XLSX, COLUNAS, OBRIGATORIAS, COLUNAS_PESSOAS,
     norm, mesKey, toFloat, round, sanitizar, nomeArquivoSaida, nomeArquivoFerias,
-    carregarTS, colaboradores,
+    carregarTS, colaboradores, carregarPessoas, parsePessoasColadas,
+    parseBoletoSulAmerica, parseBoletoPdfText, combinarBoletos,
     validarEntrada, validarFerias,
     calcularPlanoSaude, calcularFerias,
     prepararExport, montarWorkbook,

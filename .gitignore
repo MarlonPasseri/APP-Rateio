@@ -5,6 +5,8 @@
 *.csv
 uploads/
 saidas/
+node_modules/
+*.pdf
 
 # Permite a biblioteca vendorizada (não é dado)
 !docs/vendor/*.js

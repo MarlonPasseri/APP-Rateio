@@ -2,6 +2,9 @@
 /* Testes do núcleo (docs/core.js). Executar com: npm test  (node --test tests/) */
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
 const C = require("../docs/core.js");
 const XLSX = C.XLSX;
 
@@ -17,6 +20,16 @@ function tsWorkbook(rows, header = HEADER, aba = "fHorasTrabalhadas") {
 
 const JAN = new Date(2025, 0, 1);
 const FEV = new Date(2025, 1, 1);
+
+test("integridade SRI do SheetJS corresponde ao arquivo publicado", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../docs/index.html"), "utf8");
+  const match = html.match(/xlsx\.full\.min\.js"[\s\S]*?integrity="(sha384-[^"]+)"/);
+  assert.ok(match, "integrity SHA-384 do SheetJS não encontrado no HTML");
+
+  const vendor = fs.readFileSync(path.join(__dirname, "../docs/vendor/xlsx.full.min.js"));
+  const sri = `sha384-${crypto.createHash("sha384").update(vendor).digest("base64")}`;
+  assert.equal(match[1], sri);
+});
 
 // cenário-base reutilizado
 function cenarioBase() {
@@ -75,6 +88,127 @@ test("carregarTS lança erro quando faltam colunas obrigatórias", () => {
 
 test("carregarTS rejeita objeto que não é planilha", () => {
   assert.throws(() => C.carregarTS({}), /inválido|planilha/i);
+});
+
+// ---------------------------------------------------------------- carregarPessoas
+test("carregarPessoas importa nome, id opcional e valor de workbook", () => {
+  const ws = XLSX.utils.aoa_to_sheet([
+    ["Id Colaborador", "Nome", "Valor"],
+    ["COL001", "Ana Lima", "1.234,56"],
+    ["", "Bruno Sa", 450.5],
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Segurados");
+  const imp = C.carregarPessoas(wb);
+
+  assert.equal(imp.aba, "Segurados");
+  assert.deepEqual(imp.pessoas, [
+    { id: "COL001", nome: "Ana Lima", valor: 1234.56 },
+    { id: "", nome: "Bruno Sa", valor: 450.5 },
+  ]);
+});
+
+test("carregarPessoas aceita CSV com sinonimo de coluna de valor", () => {
+  const wb = XLSX.read("Colaborador;Mensalidade\nAna Lima;123,45\n", { type: "string", raw: true });
+  const imp = C.carregarPessoas(wb);
+  assert.deepEqual(imp.pessoas, [{ id: "", nome: "Ana Lima", valor: 123.45 }]);
+});
+
+test("carregarPessoas exige colunas de nome e valor", () => {
+  const ws = XLSX.utils.aoa_to_sheet([["Nome"], ["Ana"]]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Invalida");
+  assert.throws(() => C.carregarPessoas(wb), /Nome e Valor/);
+});
+
+test("parsePessoasColadas lê nome ou ID e valor copiados do Excel", () => {
+  assert.deepEqual(
+    C.parsePessoasColadas("Colaborador\tValor\nCOL001\t1.234,56\nBruno Sá\t450,50\n"),
+    [
+      { chave: "COL001", valor: 1234.56 },
+      { chave: "Bruno Sá", valor: 450.5 },
+    ]
+  );
+});
+
+test("parsePessoasColadas aceita ponto e vírgula e ignora linhas inválidas", () => {
+  assert.deepEqual(
+    C.parsePessoasColadas("Ana Lima;100,00\nlinha sem separador\n;200"),
+    [{ chave: "Ana Lima", valor: 100 }]
+  );
+  assert.deepEqual(C.parsePessoasColadas(null), []);
+});
+
+// ---------------------------------------------------------------- boleto PDF
+const TEXTO_BOLETO_SULAMERICA = `
+Fatura Mensal
+Competencia: 20/12/2024 A 19/01/2025
+Pagador: Número do Documento Vencimento
+8TMBW - GEOPROJETOS ENGENHARIA LTDA 75777255521450 06/01/2025
+VALOR TOTAL: 19.485,74
+SUL AMERICA COMPANHIA DE SEGURO SAUDE
+Razão Social: GEOPROJETOS ENGENHARIA LTDA
+Empresa: 8-TMBW Período de Competência: 20/12/2024 a 19/01/2025
+88888487744420012 65880-EXATO CARLOS SILVA SANTOS 130.012.546-29 000546290 12/05/1995 29 TITULAR 02/12/2024 R$ 566,51
+Total da Familia: R$ 566,51
+88888478858620011 65883-ESPECIAL 100 DANIEL LOPES DE OLIVEIRA 102.661.717-02 478858620 03/03/1984 40 TITULAR 20/10/2022 R$ 703,16
+88888478858620100 65883-ESPECIAL 100 SARAH OLIVEIRA LOPES 151.660.257-92 478858620 06/10/2006 18 FILHO(A) 20/10/2022 R$ 329,27
+Total da Família: R$ 1.032,43
+Total Geral: R$ 1.598,94
+Total de Segurados: 3
+`;
+
+test("parseBoletoSulAmerica extrai dados gerais e total por família", () => {
+  const boleto = C.parseBoletoSulAmerica(TEXTO_BOLETO_SULAMERICA);
+  assert.equal(boleto.seguradora, "SulAmérica");
+  assert.equal(boleto.codigo_boleto, "75777255521450");
+  assert.equal(boleto.contrato, "8-TMBW");
+  assert.equal(boleto.empresa, "GEOPROJETOS ENGENHARIA LTDA");
+  assert.equal(boleto.mes, "2025-01");
+  assert.equal(boleto.valor_boleto, 19485.74);
+  assert.equal(boleto.qtd_segurados, 3);
+  assert.deepEqual(boleto.pessoas, [
+    { id: "000546290", nome: "CARLOS SILVA SANTOS", cpf: "130.012.546-29", valor: 566.51 },
+    { id: "478858620", nome: "DANIEL LOPES DE OLIVEIRA", cpf: "102.661.717-02", valor: 1032.43 },
+  ]);
+  assert.equal(boleto.total_familias, 1598.94);
+});
+
+test("parseBoletoPdfText rejeita layouts ainda não suportados", () => {
+  assert.throws(() => C.parseBoletoPdfText("boleto desconhecido"), /não reconheço/i);
+});
+
+test("combinarBoletos soma documentos e acumula titulares repetidos", () => {
+  const primeiro = C.parseBoletoSulAmerica(TEXTO_BOLETO_SULAMERICA);
+  const segundo = {
+    ...primeiro,
+    codigo_boleto: "DOC2",
+    valor_boleto: 100,
+    total_familias: 110,
+    total_geral_relatorio: 110,
+    qtd_segurados: 2,
+    pessoas: [
+      { id: "546290", nome: "CARLOS SILVA SANTOS", cpf: "130.012.546-29", valor: 10 },
+      { id: "000999", nome: "ERIKA TESTE", cpf: "100.200.300-40", valor: 100 },
+    ],
+  };
+
+  const combinado = C.combinarBoletos([primeiro, segundo]);
+  assert.equal(combinado.quantidade_boletos, 2);
+  assert.equal(combinado.mes, "2025-01");
+  assert.equal(combinado.codigo_boleto, "75777255521450 + DOC2");
+  assert.equal(combinado.valor_boleto, 19585.74);
+  assert.equal(combinado.total_familias, 1708.94);
+  assert.equal(combinado.pessoas.length, 3);
+  assert.equal(combinado.pessoas.find((p) => p.nome === "CARLOS SILVA SANTOS").valor, 576.51);
+});
+
+test("combinarBoletos rejeita competências diferentes", () => {
+  const boleto = C.parseBoletoSulAmerica(TEXTO_BOLETO_SULAMERICA);
+  assert.throws(
+    () => C.combinarBoletos([boleto, { ...boleto, mes: "2025-02" }]),
+    /mesma competência/i
+  );
 });
 
 // ---------------------------------------------------------------- colaboradores
