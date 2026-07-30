@@ -385,6 +385,9 @@ test("calcularPlanoSaude: segurado sem horas é sinalizado", () => {
   const res = C.calcularPlanoSaude(ts, "2025-01",
     [{ id: "COL999", nome: "Fantasma", valor: 100 }], 100);
   assert.deepEqual(res.segurados_sem_horas, ["Fantasma"]);
+  assert.deepEqual(res.itens_sem_horas, [
+    { id: "COL999", nome: "Fantasma", valor: 100 },
+  ]);
   assert.equal(res.tabela_final.length, 0);
 });
 
@@ -450,6 +453,76 @@ test("montarWorkbook gera abas e valores que sobrevivem à releitura", () => {
   // aba de auditoria: cabeçalho + 5 linhas de detalhe (jan)
   const det = XLSX.utils.sheet_to_json(lido.Sheets["Detalhe_Segurados"], { header: 1, raw: true, blankrows: false });
   assert.equal(det.length, 1 + 5);
+  assert.equal(det[0][7], "Status");
+  det.slice(1).forEach((linha) => assert.equal(linha[7], "Rateado"));
+});
+
+test("montarWorkbook inclui segurado sem horas na planilha de detalhes", () => {
+  const ts = cenarioBase();
+  const segurados = [
+    { id: "COL002", nome: "Bruno Sá", valor: 600 },
+    { id: "CERT-999", nome: "Não Encontrado", valor: 150 },
+  ];
+  const res = C.calcularPlanoSaude(ts, "2025-01", segurados, 750);
+  const meta = C.prepararExport(res, {
+    seguradora: "Bradesco Saúde",
+    codigo_boleto: "B2",
+  });
+  const wb = C.montarWorkbook(res, meta);
+  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  const lido = XLSX.read(buf, { type: "buffer" });
+  const detalhe = XLSX.utils.sheet_to_json(
+    lido.Sheets["Detalhe_Segurados"],
+    { header: 1, raw: true, blankrows: false }
+  );
+
+  const naoEncontrado = detalhe.find((linha) => linha[1] === "Não Encontrado");
+  assert.ok(naoEncontrado);
+  assert.deepEqual(naoEncontrado, [
+    "CERT-999", "Não Encontrado", "", 0, 0, 150, 0, "Sem horas na TS",
+  ]);
+  assert.deepEqual(res.sem_horas, ["Não Encontrado"]);
+  assert.equal(res.qtd_gps, 1);
+  assert.equal(
+    C.round(res.tabela_final.reduce((soma, linha) => soma + linha.valor_final, 0), 2),
+    750
+  );
+});
+
+test("montarWorkbook permite exportar quando nenhum segurado tem horas", () => {
+  const ts = cenarioBase();
+  const res = C.calcularPlanoSaude(ts, "2025-01", [
+    { id: "CERT-001", nome: "Pessoa Um", valor: 100 },
+    { id: "CERT-002", nome: "Pessoa Dois", valor: 200 },
+  ], 300);
+  const meta = C.prepararExport(res, {
+    seguradora: "Exemplo",
+    codigo_boleto: "SEM-HORAS",
+  });
+  const wb = C.montarWorkbook(res, meta);
+  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  const lido = XLSX.read(buf, { type: "buffer" });
+  const rateio = XLSX.utils.sheet_to_json(
+    lido.Sheets.Rateio,
+    { header: 1, raw: true, blankrows: false }
+  );
+  const detalhe = XLSX.utils.sheet_to_json(
+    lido.Sheets.Detalhe_Segurados,
+    { header: 1, raw: true, blankrows: false }
+  );
+
+  assert.equal(res.tabela_final.length, 0);
+  assert.deepEqual(res.sem_horas, ["Pessoa Um", "Pessoa Dois"]);
+  assert.equal(rateio[rateio.length - 1][0], "TOTAL");
+  assert.equal(rateio[rateio.length - 1][4], 0);
+  assert.equal(detalhe.length, 3);
+  assert.deepEqual(
+    detalhe.slice(1).map((linha) => [linha[1], linha[5], linha[7]]),
+    [
+      ["Pessoa Um", 100, "Sem horas na TS"],
+      ["Pessoa Dois", 200, "Sem horas na TS"],
+    ]
+  );
 });
 
 // ---------------------------------------------------------------- Férias
@@ -497,6 +570,9 @@ test("calcularFerias: sinaliza funcionário sem horas no mês", () => {
     { id: "COL999", nome: "Fantasma", valor: 100 },
   ]);
   assert.deepEqual(res.funcionarios_sem_horas, ["Fantasma"]);
+  assert.deepEqual(res.itens_sem_horas, [
+    { id: "COL999", nome: "Fantasma", valor: 100 },
+  ]);
   assert.equal(res.qtd_gps, 1);
 });
 

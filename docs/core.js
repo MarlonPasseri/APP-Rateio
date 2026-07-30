@@ -558,9 +558,14 @@
     const gps = [...valorPorGp.keys()].sort((a, b) =>
       (typeof a === typeof b) ? (a > b ? 1 : a < b ? -1 : 0) : String(a).localeCompare(String(b)));
 
-    const semHoras = itens
+    const itensSemHoras = itens
       .filter((s) => !comHoras.has(String(s.id || "").trim() || norm(s.nome || "")))
-      .map((s) => s.nome);
+      .map((s) => ({
+        id: String(s.id || "").trim(),
+        nome: String(s.nome || "").trim(),
+        valor: round(toFloat(s.valor), 2),
+      }));
+    const semHoras = itensSemHoras.map((s) => s.nome);
 
     // Integridade da TS: as proporções de cada pessoa no mês devem somar ~1.
     const propPorPessoa = new Map();
@@ -574,7 +579,10 @@
       .filter((x) => Math.abs(x.soma - 1) > 0.01)
       .map((x) => ({ nome: x.nome, soma: round(x.soma, 4) }));
 
-    return { temp2, valorPorGp, horasPorGp, totalItens, totalValor, gps, semHoras, proporcaoSuspeita };
+    return {
+      temp2, valorPorGp, horasPorGp, totalItens, totalValor, gps,
+      semHoras, itensSemHoras, proporcaoSuspeita,
+    };
   }
 
   // Joga a diferença de arredondamento (alvo - soma) no GP de maior valor_final.
@@ -615,6 +623,7 @@
       segurados_sem_horas: a.semHoras,
       segurados_proporcao_suspeita: a.proporcaoSuspeita,
       sem_horas: a.semHoras,
+      itens_sem_horas: a.itensSemHoras,
       proporcao_suspeita: a.proporcaoSuspeita,
       temp2: a.temp2, tabela_final: tabelaFinal,
     };
@@ -645,6 +654,7 @@
       funcionarios_sem_horas: a.semHoras,
       funcionarios_proporcao_suspeita: a.proporcaoSuspeita,
       sem_horas: a.semHoras,
+      itens_sem_horas: a.itensSemHoras,
       proporcao_suspeita: a.proporcaoSuspeita,
       temp2: a.temp2, tabela_final: tabelaFinal,
     };
@@ -714,12 +724,23 @@
 
     const aoa2 = [[
       "Id Colaborador", "Nome Colaborador", "GP", "Horas Trabalhadas",
-      "Proporção de Hora", meta.colValor || "Valor", "Valor Rateado (Valor×Prop.)",
+      "Proporção de Hora", meta.colValor || "Valor", "Valor Rateado (Valor×Prop.)", "Status",
     ]];
     res.temp2.forEach((r) =>
-      aoa2.push([r.id, r.nome, r.gp, r.horas, r.proporcao, round(r.valor_pessoa, 2), round(r.valor_linha, 2)]));
+      aoa2.push([
+        r.id, r.nome, r.gp, r.horas, r.proporcao,
+        round(r.valor_pessoa, 2), round(r.valor_linha, 2), "Rateado",
+      ]));
+    (res.itens_sem_horas || []).forEach((item) =>
+      aoa2.push([
+        item.id, item.nome, "", 0, 0,
+        round(item.valor, 2), 0, "Sem horas na TS",
+      ]));
     const ws2 = XLSX.utils.aoa_to_sheet(aoa2);
-    ws2["!cols"] = [{ wch: 16 }, { wch: 28 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 14 }, { wch: 22 }];
+    ws2["!cols"] = [
+      { wch: 16 }, { wch: 28 }, { wch: 10 }, { wch: 16 },
+      { wch: 16 }, { wch: 14 }, { wch: 22 }, { wch: 18 },
+    ];
     XLSX.utils.book_append_sheet(wb, ws2, meta.detalheAba || "Detalhe");
 
     return wb;

@@ -841,11 +841,16 @@ $("#btn-calc").addEventListener("click", () => {
   }
 
   if (!resultado.tabela_final.length) {
-    msg(st, `Nenhuma hora encontrada na TS para os ${ROTULO()}s selecionados.`, "erro");
-    return;
+    msg(
+      st,
+      `Nenhuma hora encontrada na TS para os ${ROTULO()}s selecionados. ` +
+      "Eles serão incluídos no Excel com o status \"Sem horas na TS\".",
+      "warn"
+    );
+  } else {
+    msg(st, "", "");
   }
 
-  msg(st, "", "");
   salvarValoresMes();
   ULTIMO = { res: resultado, extra };
   mostrarResultado(resultado);
@@ -863,7 +868,9 @@ function mostrarResultado(dados) {
 
   const avisos = [];
   if (dados.sem_horas.length) {
-    avisos.push(`Sem horas na TS e não rateados: ${dados.sem_horas.join(", ")}.`);
+    avisos.push(
+      `Sem horas na TS e não rateados, mas incluídos no Excel: ${dados.sem_horas.join(", ")}.`
+    );
   }
   if (dados.proporcao_suspeita?.length) {
     avisos.push(
@@ -913,7 +920,7 @@ function mostrarResultado(dados) {
        <td class="num">${esc(fmtBRL(totalRateado))}</td></tr></tfoot>`;
 
   $("#busca-gp").value = "";
-  $("#result-empty").classList.add("hidden");
+  $("#result-empty").classList.toggle("hidden", RESULT_ROWS.length > 0);
   $("#card-result").classList.remove("hidden");
   setStep(4);
   $("#card-result").scrollIntoView({ behavior: "smooth", block: "start" });
