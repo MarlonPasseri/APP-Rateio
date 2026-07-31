@@ -244,7 +244,9 @@
     const partesFim = fimCompetencia.split("/");
     const mes = partesFim.length === 3 ? `${partesFim[2]}-${partesFim[1]}` : "";
 
-    const valor = limpo.match(/VALOR TOTAL:\s*(?:R\$\s*)?([\d.]+,\d{2})/i);
+    const valor = limpo.match(/VALOR TOTAL:\s*(?:R\$\s*)?([\d.]+,\d{2})/i)
+      || limpo.match(/\(=\)\s*Valor Cobrado\s*\n\s*(?:R\$\s*)?([\d.]+,\d{2})/i)
+      || limpo.match(/\bValor do Documento\s*\n\s*(?:[A-Z]{2,4}\s+)?R\$\s*([\d.]+,\d{2})/i);
     const vencimento = limpo.match(/Vencimento[^\d\n]*(?:\n[^\n]*)?(\d{2}\/\d{2}\/\d{4})/i);
     const documento = limpo.match(
       /N[úu]mero do Documento[^\n]*\n[^\n]*?\b(\d{10,})\b/i

@@ -174,6 +174,18 @@ test("parseBoletoSulAmerica extrai dados gerais e total por família", () => {
   assert.equal(boleto.total_familias, 1598.94);
 });
 
+test("parseBoletoSulAmerica aceita boleto bancário com Valor Cobrado", () => {
+  const texto = TEXTO_BOLETO_SULAMERICA.replace(
+    "VALOR TOTAL: 19.485,74",
+    "(=) Valor Cobrado\n19.485,74"
+  );
+  const boleto = C.parseBoletoSulAmerica(texto);
+
+  assert.equal(boleto.valor_boleto, 19485.74);
+  assert.equal(boleto.pessoas.length, 2);
+  assert.equal(boleto.total_familias, 1598.94);
+});
+
 const TEXTO_BOLETO_BRADESCO = `
 SPG/Grupos Especiais BRADESCO SAUDE - FATURA TECNICA
 Cia Suc Apol.(s) Cob Fatura M/A nr Estipulante EMPRESA EXEMPLO LTDA Ramo Data Emissao Pag.
