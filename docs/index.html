@@ -14,7 +14,7 @@
            form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <title>Rateio por GP</title>
-<link rel="stylesheet" href="styles.css?v=6">
+<link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
 <header class="app-header">
@@ -41,20 +41,24 @@
 
 <main class="wrap">
   <nav class="stepper" id="stepper" aria-label="Etapas do rateio">
-    <div class="stp active" data-stp="1"><span class="dot">1</span><span>Configuração</span></div>
+    <button class="stp active" type="button" data-stp="1" data-target="card-tipo" aria-label="Configuração" aria-current="step"><span class="dot">1</span><span>Configuração</span></button>
     <div class="stp-line"></div>
-    <div class="stp" data-stp="2"><span class="dot">2</span><span>Planilha TS</span></div>
+    <button class="stp" type="button" data-stp="2" data-target="card-ts" aria-label="Planilha TS"><span class="dot">2</span><span>Planilha TS</span></button>
     <div class="stp-line"></div>
-    <div class="stp" data-stp="3"><span class="dot">3</span><span>Valores</span></div>
+    <button class="stp" type="button" data-stp="3" data-target="card-boleto" aria-label="Valores" disabled><span class="dot">3</span><span>Valores</span></button>
     <div class="stp-line"></div>
-    <div class="stp" data-stp="4"><span class="dot">4</span><span>Resultado</span></div>
+    <button class="stp" type="button" data-stp="4" data-target="card-result" aria-label="Resultado" disabled><span class="dot">4</span><span>Resultado</span></button>
   </nav>
 
+  <div class="setup-grid">
   <section class="section-block" id="card-tipo">
     <div class="section-heading">
-      <div>
-        <h2>Tipo de rateio</h2>
-        <p>Selecione a operação</p>
+      <div class="heading-cluster">
+        <span class="section-index" aria-hidden="true">01</span>
+        <div>
+          <h2>Tipo de rateio</h2>
+          <p>Selecione a operação</p>
+        </div>
       </div>
       <div class="type-switch" aria-label="Tipo de rateio">
         <button class="type-option selected" data-tipo="saude" aria-pressed="true">
@@ -77,9 +81,12 @@
 
   <section class="section-block" id="card-ts">
     <div class="section-heading">
-      <div>
-        <h2>Planilha TS</h2>
-        <p>Base de horas e colaboradores</p>
+      <div class="heading-cluster">
+        <span class="section-index" aria-hidden="true">02</span>
+        <div>
+          <h2>Planilha TS</h2>
+          <p>Base de horas e colaboradores</p>
+        </div>
       </div>
     </div>
 
@@ -140,13 +147,17 @@
     </div>
     <div id="ts-status" aria-live="polite"></div>
   </section>
+  </div>
 
   <div class="workspace hidden" id="workspace">
     <section class="section-block settings-section" id="card-boleto">
       <div class="section-heading">
-        <div>
-          <h2 id="titulo-dados">Dados do boleto</h2>
-          <p id="sub-dados">Identificação e valor total</p>
+        <div class="heading-cluster">
+          <span class="section-index" aria-hidden="true">03</span>
+          <div>
+            <h2 id="titulo-dados">Dados do boleto</h2>
+            <p id="sub-dados">Identificação e valor total</p>
+          </div>
         </div>
         <div class="so-saude">
           <input class="visually-hidden" type="file" id="boleto-arquivo" accept=".pdf,application/pdf" multiple />
@@ -199,9 +210,12 @@
 
     <section class="section-block people-section" id="card-seg">
       <div class="people-heading">
-        <div>
-          <h2 id="titulo-seg">Segurados e valores</h2>
-          <p id="sub-seg">Informe o valor de quem participa</p>
+        <div class="heading-cluster">
+          <span class="section-index" aria-hidden="true">04</span>
+          <div>
+            <h2 id="titulo-seg">Segurados e valores</h2>
+            <p id="sub-seg">Informe o valor de quem participa</p>
+          </div>
         </div>
         <div class="action-group">
           <input class="visually-hidden" type="file" id="pessoas-arquivo" accept=".xlsx,.xlsm,.csv" />
@@ -270,6 +284,7 @@
           <span>Diferença</span>
           <strong class="num" id="soma-dif">R$ 0,00</strong>
           <small id="dif-status">Aguardando valores</small>
+          <progress class="amount-progress" id="amount-progress" max="100" value="0" aria-label="Conferência dos valores"></progress>
         </div>
         <button class="btn primary calculate" id="btn-calc" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -343,6 +358,6 @@
 <script src="core.js?v=6"></script>
 <script src="vendor/pdf.min.js?v=6.2.108"></script>
 <script src="pdf-reader.js?v=2"></script>
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

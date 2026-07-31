@@ -78,6 +78,7 @@ function msg(el, texto, tipo = "info") {
   if (!texto) return;
   const box = document.createElement("div");
   box.className = `msg ${tipo}`;
+  box.setAttribute("role", tipo === "erro" ? "alert" : "status");
   box.innerHTML = ICON[tipo] || ICON.info;
   const conteudo = document.createElement("div");
   conteudo.textContent = texto;
@@ -90,6 +91,7 @@ function msgs(el, lista, tipo = "erro") {
   (lista || []).forEach((texto) => {
     const box = document.createElement("div");
     box.className = `msg ${tipo}`;
+    box.setAttribute("role", tipo === "erro" ? "alert" : "status");
     box.innerHTML = ICON[tipo] || ICON.info;
     const conteudo = document.createElement("div");
     conteudo.textContent = texto;
@@ -99,12 +101,37 @@ function msgs(el, lista, tipo = "erro") {
 }
 
 function setStep(n) {
-  document.querySelectorAll(".stp").forEach((step) => {
+  const steps = [...document.querySelectorAll(".stp")];
+  steps.forEach((step) => {
     const i = Number(step.dataset.stp);
     step.classList.toggle("done", i < n);
     step.classList.toggle("active", i === n);
+    step.disabled = (i === 3 && !TS) || (i === 4 && !ULTIMO);
+    if (i === n) step.setAttribute("aria-current", "step");
+    else step.removeAttribute("aria-current");
     step.querySelector(".dot").innerHTML = i < n ? ICON.check : String(i);
   });
+  document.querySelectorAll(".stp-line").forEach((line, index) => {
+    line.classList.toggle("done", index < n - 1);
+  });
+  $("#stepper").dataset.current = String(n);
+}
+
+document.querySelectorAll(".stp[data-target]").forEach((step) => {
+  step.addEventListener("click", () => {
+    if (step.disabled) return;
+    const target = document.getElementById(step.dataset.target);
+    if (target && !target.classList.contains("hidden")) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  });
+});
+
+function setBusy(section, button, busy) {
+  section?.classList.toggle("is-processing", busy);
+  section?.setAttribute("aria-busy", String(busy));
+  button?.classList.toggle("is-loading", busy);
+  if (button) button.disabled = busy;
 }
 
 function invalidarResultado() {
@@ -191,7 +218,7 @@ async function carregarArquivoTS() {
   }
 
   msg($("#ts-status"), "Lendo a planilha TS...", "info");
-  $("#btn-upload").disabled = true;
+  setBusy($("#card-ts"), $("#btn-upload"), true);
   try {
     const XLSX = exigirXLSX();
     const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
@@ -201,7 +228,7 @@ async function carregarArquivoTS() {
   } catch (e) {
     msg($("#ts-status"), e.message || "Não foi possível ler a planilha.", "erro");
   } finally {
-    $("#btn-upload").disabled = false;
+    setBusy($("#card-ts"), $("#btn-upload"), false);
   }
 }
 
@@ -653,6 +680,7 @@ async function importarBoletosPdf(files) {
 $("#boleto-arquivo").addEventListener("change", async () => {
   const files = $("#boleto-arquivo").files;
   if (!files.length) return;
+  setBusy($("#card-boleto"), null, true);
   try {
     await importarBoletosPdf(files);
   } catch (erro) {
@@ -660,6 +688,7 @@ $("#boleto-arquivo").addEventListener("change", async () => {
     msg($("#boleto-status"), erro.message || "Não foi possível ler os boletos.", "erro");
   } finally {
     $("#boleto-arquivo").value = "";
+    setBusy($("#card-boleto"), null, false);
   }
 });
 
@@ -780,6 +809,11 @@ function recalcSoma(invalidar = true) {
   $("#soma-boleto").textContent = fmtBRL(boleto);
   $("#soma-dif").textContent = fmtBRL(diferenca);
   $("#active-count").textContent = `${pessoas.length} ${pessoas.length === 1 ? "participante" : "participantes"}`;
+  const progresso = $("#amount-progress");
+  progresso.value = boleto > 0 ? Math.min(100, Math.max(0, (soma / boleto) * 100)) : 0;
+  progresso.title = boleto > 0
+    ? `${Math.round((soma / boleto) * 100)}% do boleto informado`
+    : "Aguardando o valor do boleto";
 
   const chip = $("#chip-dif");
   chip.classList.remove("exact", "mismatch");
