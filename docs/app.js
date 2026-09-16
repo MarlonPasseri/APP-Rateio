@@ -12,6 +12,8 @@ let FILTRO = "todos";
 let MES_ATUAL = "";
 let ARQUIVO_TS = "";
 let RESULT_ROWS = [];
+let BLOCOS = [];
+let PENDENTES = [];
 
 const COLAB_MAP = new Map();
 const VALORES_POR_MES = new Map();
@@ -55,7 +57,7 @@ const normalizarId = (id) => {
   if (!valor) return "";
   return valor.replace(/^0+(?=\d)/, "");
 };
-const ROTULO = () => (TIPO === "ferias" ? "funcionário" : "segurado");
+const ROTULO = () => (TIPO === "saude" ? "segurado" : "funcionário");
 const capitaliza = (s) => s ? s[0].toUpperCase() + s.slice(1) : "";
 
 function esc(s) {
@@ -142,28 +144,48 @@ function invalidarResultado() {
   setStep(TS ? 3 : 2);
 }
 
+const TEXTOS = {
+  saude: {
+    corpo: "modo-saude", nome: "Plano de Saúde", mes: "Mês de referência",
+    dados: ["Dados do boleto", "Identificação e valor total"],
+    pessoas: ["Segurados e valores", "Informe o valor do plano de quem participa"],
+    soma: "Soma dos segurados", resultado: "Segurados",
+  },
+  ferias: {
+    corpo: "modo-ferias", nome: "Férias", mes: "Mês de referência",
+    dados: ["Dados das férias", "Mês de referência do pagamento"],
+    pessoas: ["Funcionários e valores de férias", "Informe o valor das férias de quem participa"],
+    soma: "Soma das férias", resultado: "Funcionários",
+  },
+  alimentacao: {
+    corpo: "modo-alim", nome: "Alimentação", mes: "Mês de competência",
+    dados: ["Dados do lançamento", "Fornecedor, competência e boleto de VR/VA"],
+    pessoas: ["Funcionários e valores (VR/VA)", "Importe o pedido de recarga ou informe VR e VA de quem participa"],
+    soma: "Soma do pedido", resultado: "Funcionários",
+  },
+};
+
 function setTipo(tipo) {
-  if (tipo !== "saude" && tipo !== "ferias") return;
+  if (!TEXTOS[tipo]) return;
   if (TIPO !== tipo) invalidarResultado();
   TIPO = tipo;
-  const ferias = tipo === "ferias";
+  const tx = TEXTOS[tipo];
 
-  document.body.classList.toggle("modo-ferias", ferias);
+  Object.values(TEXTOS).forEach((t) => document.body.classList.toggle(t.corpo, t === tx));
   document.querySelectorAll(".type-option[data-tipo]").forEach((button) => {
     const ativo = button.dataset.tipo === tipo;
     button.classList.toggle("selected", ativo);
     button.setAttribute("aria-pressed", String(ativo));
   });
 
-  $("#titulo-dados").textContent = ferias ? "Dados das férias" : "Dados do boleto";
-  $("#sub-dados").textContent = ferias ? "Mês de referência do pagamento" : "Identificação e valor total";
-  $("#titulo-seg").textContent = ferias ? "Funcionários e valores de férias" : "Segurados e valores";
-  $("#sub-seg").textContent = ferias
-    ? "Informe o valor das férias de quem participa"
-    : "Informe o valor do plano de quem participa";
-  $("#lbl-soma").textContent = ferias ? "Soma das férias" : "Soma dos segurados";
-  $("#result-pessoas-label").textContent = ferias ? "Funcionários" : "Segurados";
-  $("#header-tipo").textContent = ferias ? "Férias" : "Plano de Saúde";
+  $("#titulo-dados").textContent = tx.dados[0];
+  $("#sub-dados").textContent = tx.dados[1];
+  $("#lbl-mes").textContent = tx.mes;
+  $("#titulo-seg").textContent = tx.pessoas[0];
+  $("#sub-seg").textContent = tx.pessoas[1];
+  $("#lbl-soma").textContent = tx.soma;
+  $("#result-pessoas-label").textContent = tx.resultado;
+  $("#header-tipo").textContent = tx.nome;
   recalcSoma();
 }
 
@@ -284,11 +306,15 @@ function salvarValoresMes() {
       ? row.querySelector(".seg-input").value.trim()
       : row.dataset.nome;
     const valor = row.querySelector(".seg-valor").value.trim();
-    if (nome || valor) {
+    const vr = row.querySelector(".seg-vr").value.trim();
+    const va = row.querySelector(".seg-va").value.trim();
+    if (nome || valor || vr || va) {
       valores.push({
         id: row.dataset.id || "",
         nome,
         valor,
+        vr,
+        va,
         manual: row.dataset.manual === "true",
       });
     }
@@ -311,7 +337,7 @@ function carregarColabs() {
 
   COLABS.forEach((colab) => {
     const salvo = salvosPorChave.get(chavePessoa(colab));
-    addSeg({ ...colab, valor: salvo?.valor || "" }, false, true);
+    addSeg({ ...colab, valor: salvo?.valor || "", vr: salvo?.vr || "", va: salvo?.va || "" }, false, true);
   });
   salvos.filter((p) => p.manual).forEach((p) => addSeg(p, true, true));
 
@@ -322,6 +348,7 @@ function carregarColabs() {
   });
   atualizarResumoTS();
   recalcSoma(false);
+  renderizarPendentes();
   msg(
     $("#seg-status"),
     `${COLABS.length} colaboradores carregados da TS para ${mesLabel(MES_ATUAL)}.`,
@@ -393,30 +420,34 @@ function addSeg(pessoa = null, manual = false, adiarAtualizacao = false) {
   idCell.className = "id-col person-id";
   idCell.textContent = id || "—";
 
-  const valorCell = document.createElement("td");
-  valorCell.className = "value-col";
-  const money = document.createElement("div");
-  money.className = "money-field";
-  money.innerHTML = "<span>R$</span>";
-  const valor = document.createElement("input");
-  valor.className = "seg-valor";
-  valor.inputMode = "decimal";
-  valor.placeholder = "0,00";
-  valor.value = typeof dados.valor === "string"
-    ? dados.valor
-    : valorMoeda(C.toFloat(dados.valor));
-  valor.setAttribute("aria-label", `Valor de ${nome || ROTULO()}`);
-  valor.addEventListener("input", () => {
-    atualizarLinha(row);
-    recalcSoma();
-  });
-  valor.addEventListener("blur", () => {
-    valor.value = valorMoeda(parseNum(valor.value));
-    atualizarLinha(row);
-    recalcSoma(false);
-  });
-  money.appendChild(valor);
-  valorCell.appendChild(money);
+  const campoMoeda = (classe, coluna, inicial, rotulo) => {
+    const cell = document.createElement("td");
+    cell.className = `value-col ${coluna}`;
+    const money = document.createElement("div");
+    money.className = "money-field";
+    money.innerHTML = "<span>R$</span>";
+    const input = document.createElement("input");
+    input.className = classe;
+    input.inputMode = "decimal";
+    input.placeholder = "0,00";
+    input.value = typeof inicial === "string" ? inicial : valorMoeda(C.toFloat(inicial));
+    input.setAttribute("aria-label", `${rotulo} de ${nome || ROTULO()}`);
+    input.addEventListener("input", () => {
+      atualizarLinha(row);
+      recalcSoma();
+    });
+    input.addEventListener("blur", () => {
+      input.value = valorMoeda(parseNum(input.value));
+      atualizarLinha(row);
+      recalcSoma(false);
+    });
+    money.appendChild(input);
+    cell.appendChild(money);
+    return cell;
+  };
+  const valorCell = campoMoeda("seg-valor", "nao-alim", dados.valor, "Valor");
+  const vrCell = campoMoeda("seg-vr", "so-alim", dados.vr, "VR");
+  const vaCell = campoMoeda("seg-va", "so-alim", dados.va, "VA");
 
   const actionCell = document.createElement("td");
   actionCell.className = "action-col";
@@ -428,12 +459,12 @@ function addSeg(pessoa = null, manual = false, adiarAtualizacao = false) {
   action.innerHTML = manual ? ICON.trash : ICON.close;
   action.addEventListener("click", () => {
     if (manual) row.remove();
-    else valor.value = "";
+    else row.querySelectorAll(".seg-valor, .seg-vr, .seg-va").forEach((input) => { input.value = ""; });
     recalcSoma();
   });
   actionCell.appendChild(action);
 
-  row.append(status, pessoaCell, idCell, valorCell, actionCell);
+  row.append(status, pessoaCell, idCell, valorCell, vrCell, vaCell, actionCell);
   $("#seg-lista").appendChild(row);
   atualizarLinha(row);
   if (!adiarAtualizacao) recalcSoma();
@@ -445,8 +476,19 @@ $("#btn-add-seg").addEventListener("click", () => {
   row.querySelector(".seg-input").focus();
 });
 
+function valoresLinha(row) {
+  const ler = (classe) => row.querySelector(classe).value.trim();
+  if (TIPO === "alimentacao") {
+    const vr = parseNum(ler(".seg-vr"));
+    const va = parseNum(ler(".seg-va"));
+    return { vr, va, valor: vr + va, preenchido: !!(ler(".seg-vr") || ler(".seg-va")) };
+  }
+  const texto = ler(".seg-valor");
+  return { valor: parseNum(texto), preenchido: !!texto };
+}
+
 function atualizarLinha(row) {
-  const valor = parseNum(row.querySelector(".seg-valor").value);
+  const valor = valoresLinha(row).valor;
   const preenchido = valor !== 0;
   row.classList.toggle("has-value", preenchido);
   row.querySelector(".status-dot").title = preenchido ? "Com valor" : "Sem valor";
@@ -458,15 +500,15 @@ function lerSegurados() {
     const nome = row.dataset.manual === "true"
       ? row.querySelector(".seg-input").value.trim()
       : row.dataset.nome;
-    const valorTxt = row.querySelector(".seg-valor").value.trim();
-    const valor = parseNum(valorTxt);
-    if (!nome || !valorTxt || valor === 0) return;
+    const valores = valoresLinha(row);
+    if (!nome || !valores.preenchido || valores.valor === 0) return;
 
     const id = row.dataset.id || "";
     const colab = COLAB_MAP.get(id) || COLAB_MAP.get(C.norm(nome));
+    const { preenchido, ...numeros } = valores;
     pessoas.push(colab
-      ? { id: colab.id, nome: colab.nome, valor }
-      : { id, nome, valor });
+      ? { id: colab.id, nome: colab.nome, ...numeros }
+      : { id, nome, ...numeros });
   });
   return pessoas;
 }
@@ -758,12 +800,14 @@ function atualizarValidacao(exibir = false) {
   const pessoas = lerSegurados();
   let temNegativo = false;
   document.querySelectorAll(".seg-row").forEach((row) => {
-    const input = row.querySelector(".seg-valor");
-    const negativo = parseNum(input.value) < 0;
-    input.setAttribute("aria-invalid", String(negativo));
-    temNegativo ||= negativo;
+    row.querySelectorAll(".seg-valor, .seg-vr, .seg-va").forEach((input) => {
+      const negativo = parseNum(input.value) < 0;
+      input.setAttribute("aria-invalid", String(negativo));
+      temNegativo ||= negativo;
+    });
   });
   const mesInvalido = !MES_ATUAL;
+  const fornecedorInvalido = TIPO === "alimentacao" && !$("#fornecedor").value.trim();
   const seguradoraInvalida = TIPO === "saude" && !$("#seguradora").value.trim();
   const codigoInvalido = TIPO === "saude" && !$("#codigo").value.trim();
   const boletoInvalido = TIPO === "saude" && parseNum($("#valor_boleto").value) <= 0;
@@ -772,19 +816,21 @@ function atualizarValidacao(exibir = false) {
   setFieldState("#seguradora", seguradoraInvalida, "Informe a seguradora.", exibir || $("#seguradora").dataset.touched === "true");
   setFieldState("#codigo", codigoInvalido, "Informe o código.", exibir || $("#codigo").dataset.touched === "true");
   setFieldState("#valor_boleto", boletoInvalido, "Informe um valor maior que zero.", exibir || $("#valor_boleto").dataset.touched === "true");
+  setFieldState("#fornecedor", fornecedorInvalido, "Informe o fornecedor.", exibir || $("#fornecedor").dataset.touched === "true");
 
   const valido = !!TS
     && !mesInvalido
     && !seguradoraInvalida
     && !codigoInvalido
     && !boletoInvalido
+    && !fornecedorInvalido
     && !temNegativo
     && pessoas.length > 0;
   $("#btn-calc").disabled = !valido;
   return valido;
 }
 
-["#seguradora", "#codigo", "#valor_boleto"].forEach((id) => {
+["#seguradora", "#codigo", "#valor_boleto", "#fornecedor", "#lancamento", "#periodo"].forEach((id) => {
   $(id).addEventListener("input", () => {
     atualizarValidacao();
     invalidarResultado();
@@ -817,7 +863,7 @@ function recalcSoma(invalidar = true) {
 
   const chip = $("#chip-dif");
   chip.classList.remove("exact", "mismatch");
-  if (TIPO === "saude" && boleto > 0 && pessoas.length) {
+  if (TIPO !== "ferias" && boleto > 0 && pessoas.length) {
     if (Math.abs(diferenca) < 0.01) {
       chip.classList.add("exact");
       $("#dif-status").textContent = "Valores conferem";
@@ -828,7 +874,9 @@ function recalcSoma(invalidar = true) {
         : `Excede ${fmtBRL(Math.abs(diferenca))}`;
     }
   } else {
-    $("#dif-status").textContent = "Aguardando valores";
+    $("#dif-status").textContent = TIPO === "alimentacao" && !boleto
+      ? "Boleto opcional"
+      : "Aguardando valores";
   }
 
   document.querySelectorAll(".seg-row").forEach(atualizarLinha);
@@ -849,7 +897,25 @@ $("#btn-calc").addEventListener("click", () => {
   let resultado;
   let extra;
 
-  if (TIPO === "ferias") {
+  if (TIPO === "alimentacao") {
+    const entrada = {
+      mes: MES_ATUAL,
+      fornecedor: $("#fornecedor").value.trim(),
+      valor_boleto: parseNum($("#valor_boleto").value) || "",
+      funcionarios: pessoas,
+    };
+    const validacao = C.validarAlimentacao(entrada);
+    if (!validacao.ok) {
+      msgs(st, validacao.erros, "erro");
+      return;
+    }
+    resultado = C.calcularAlimentacao(TS, MES_ATUAL, pessoas, entrada.valor_boleto);
+    extra = {
+      fornecedor: entrada.fornecedor,
+      lancamento: $("#lancamento").value.trim(),
+      periodo: $("#periodo").value.trim(),
+    };
+  } else if (TIPO === "ferias") {
     const validacao = C.validarFerias({ mes: MES_ATUAL, funcionarios: pessoas });
     if (!validacao.ok) {
       msgs(st, validacao.erros, "erro");
@@ -891,14 +957,15 @@ $("#btn-calc").addEventListener("click", () => {
 });
 
 function mostrarResultado(dados) {
-  const ferias = dados.tipo === "ferias";
-  const qtdPessoas = ferias ? dados.qtd_funcionarios : dados.qtd_segurados;
+  const saude = dados.tipo === "plano_saude";
+  const alim = dados.tipo === "alimentacao";
+  const qtdPessoas = saude ? dados.qtd_segurados : dados.qtd_funcionarios;
   const totalFinal = dados.tabela_final.reduce((acc, row) => acc + row.valor_final, 0);
 
   $("#result-total").textContent = fmtBRL(totalFinal);
   $("#result-gps").textContent = dados.qtd_gps;
   $("#result-pessoas").textContent = qtdPessoas;
-  $("#result-pessoas-label").textContent = ferias ? "Funcionários" : "Segurados";
+  $("#result-pessoas-label").textContent = saude ? "Segurados" : "Funcionários";
 
   const avisos = [];
   if (dados.sem_horas.length) {
@@ -914,7 +981,19 @@ function mostrarResultado(dados) {
       ).join(", ") + "."
     );
   }
-  if (!ferias && Math.abs(dados.diferenca_boleto_segurados) > 0.009) {
+  if (alim && dados.valor_boleto !== null && Math.abs(dados.diferenca_boleto) > 0.009) {
+    avisos.push(
+      `Boleto (${fmtBRL(dados.valor_boleto)}) e soma do pedido (${fmtBRL(dados.total_alimentacao)}) ` +
+      `diferem em ${fmtBRL(dados.diferenca_boleto)}. Confira se faltou alguma quinzena ou funcionário.`
+    );
+  }
+  if (alim && PENDENTES.length) {
+    avisos.push(
+      `${PENDENTES.length} nome(s) do pedido sem colaborador escolhido ficaram fora do rateio: ` +
+      PENDENTES.map((p) => p.nome).join(", ") + "."
+    );
+  }
+  if (saude && Math.abs(dados.diferenca_boleto_segurados) > 0.009) {
     avisos.push(
       `Boleto e soma dos segurados diferem em ${fmtBRL(dados.diferenca_boleto_segurados)}. ` +
       "O valor final foi ajustado ao boleto."
@@ -925,33 +1004,31 @@ function mostrarResultado(dados) {
   $("#result-alert-count").textContent = avisos.length;
   msgs($("#result-msgs"), avisos, "warn");
 
-  let totalHoras = 0;
-  let totalValor = 0;
-  let totalProporcao = 0;
-  let totalRateado = 0;
+  const moeda = (v) => `<td class="num">${esc(fmtBRL(v))}</td>`;
+  const total = { horas: 0, vr: 0, va: 0, valor: 0, proporcao: 0, valor_final: 0 };
   RESULT_ROWS = dados.tabela_final.map((row) => {
-    totalHoras += row.horas;
-    totalValor += row.valor;
-    totalProporcao += row.proporcao;
-    totalRateado += row.valor_final;
+    Object.keys(total).forEach((k) => { total[k] += row[k] || 0; });
     return {
       gp: String(row.gp),
       html: `<tr data-gp="${esc(C.norm(row.gp))}">
         <td>${esc(row.gp)}</td>
         <td class="num">${esc(fmtNum(row.horas))}</td>
-        <td class="num">${esc(fmtBRL(row.valor))}</td>
+        ${alim ? moeda(row.vr) + moeda(row.va) : ""}
+        ${moeda(row.valor)}
         <td class="num">${esc(fmtPct(row.proporcao))}</td>
-        <td class="num">${esc(fmtBRL(row.valor_final))}</td>
+        ${moeda(row.valor_final)}
       </tr>`,
     };
   });
 
+  const cabExtra = alim ? "<th>VR</th><th>VA</th>" : "";
   $("#tabela-final").innerHTML =
-    `<thead><tr><th>GP</th><th>Horas</th><th>Valor</th><th>Proporção</th><th>Valor final</th></tr></thead>
+    `<thead><tr><th>GP</th><th>Horas</th>${cabExtra}<th>Valor</th><th>Proporção</th><th>Valor final</th></tr></thead>
      <tbody>${RESULT_ROWS.map((row) => row.html).join("")}</tbody>
-     <tfoot><tr><td>TOTAL</td><td class="num">${esc(fmtNum(totalHoras))}</td>
-       <td class="num">${esc(fmtBRL(totalValor))}</td><td class="num">${esc(fmtPct(totalProporcao))}</td>
-       <td class="num">${esc(fmtBRL(totalRateado))}</td></tr></tfoot>`;
+     <tfoot><tr><td>TOTAL</td><td class="num">${esc(fmtNum(total.horas))}</td>
+       ${alim ? moeda(total.vr) + moeda(total.va) : ""}
+       ${moeda(total.valor)}<td class="num">${esc(fmtPct(total.proporcao))}</td>
+       ${moeda(total.valor_final)}</tr></tfoot>`;
 
   $("#busca-gp").value = "";
   $("#result-empty").classList.toggle("hidden", RESULT_ROWS.length > 0);
@@ -979,6 +1056,171 @@ $("#btn-download").addEventListener("click", () => {
   const exportacao = C.prepararExport(ULTIMO.res, ULTIMO.extra);
   const workbook = C.montarWorkbook(ULTIMO.res, exportacao);
   C.XLSX.writeFile(workbook, exportacao.nomeArquivo);
+});
+
+// ---- Alimentação: pedido de recarga (VR/VA) ----
+// Escolhas manuais "nome no pedido -> colaborador da TS" ficam salvas neste navegador.
+const APELIDOS_KEY = "rateio.alimentacao.apelidos";
+
+function lerApelidos() {
+  try {
+    return JSON.parse(localStorage.getItem(APELIDOS_KEY) || "{}") || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function salvarApelido(nomePedido, colab) {
+  try {
+    const apelidos = lerApelidos();
+    apelidos[C.norm(nomePedido)] = colab.id || colab.nome;
+    localStorage.setItem(APELIDOS_KEY, JSON.stringify(apelidos));
+  } catch (e) {
+    /* armazenamento indisponível: segue sem memorizar */
+  }
+}
+
+function casarPedido(nome) {
+  const salvo = lerApelidos()[C.norm(nome)];
+  const porApelido = salvo && COLABS.find((c) => (c.id || c.nome) === salvo);
+  if (porApelido) return { colab: porApelido, candidatos: [] };
+  return C.casarNome(nome, COLABS);
+}
+
+function preencherPedido(row, item) {
+  const vr = row.querySelector(".seg-vr");
+  const va = row.querySelector(".seg-va");
+  vr.value = valorMoeda(C.round(parseNum(vr.value) + item.vr, 2));
+  va.value = valorMoeda(C.round(parseNum(va.value) + item.va, 2));
+  atualizarLinha(row);
+}
+
+function renderizarBlocos(nomeArquivo) {
+  const item = (bloco) =>
+    `<label class="bloco"><input type="checkbox" value="${BLOCOS.indexOf(bloco)}" />` +
+    `<span class="b-tit">${esc(bloco.titulo || bloco.aba)}` +
+    `<small>Aba “${esc(bloco.aba)}” · ${bloco.itens.length} funcionário(s)</small></span>` +
+    `<span class="b-val num">${esc(fmtBRL(bloco.total))}` +
+    `<small>VR ${esc(fmtBRL(bloco.total_vr))} · VA ${esc(fmtBRL(bloco.total_va))}</small></span></label>`;
+  const avulsos = BLOCOS.filter((b) => b.avulso);
+  let html = BLOCOS.filter((b) => !b.avulso).map(item).join("");
+  if (avulsos.length) {
+    html += `<details><summary>Pedidos avulsos (${avulsos.length})</summary>${avulsos.map(item).join("")}</details>`;
+  }
+  $("#pedido-blocos").innerHTML = html;
+  $("#pedido-file-name").textContent = nomeArquivo;
+  $("#pedido-panel").classList.remove("hidden");
+}
+
+function renderizarPendentes() {
+  const box = $("#pedido-pendentes");
+  box.classList.toggle("hidden", PENDENTES.length === 0);
+  box.replaceChildren();
+  if (!PENDENTES.length) return;
+
+  const titulo = document.createElement("h3");
+  titulo.textContent = `${PENDENTES.length} nome(s) do pedido sem colaborador`;
+  const ajuda = document.createElement("p");
+  ajuda.textContent = "Escolha o colaborador da TS correspondente. A escolha fica salva neste navegador.";
+  box.append(titulo, ajuda);
+
+  PENDENTES.forEach((pendente) => {
+    const linha = document.createElement("div");
+    linha.className = "pendente";
+    const nome = document.createElement("span");
+    nome.innerHTML = `<strong>${esc(pendente.nome)}</strong>`;
+    const dica = document.createElement("small");
+    const candidatos = C.casarNome(pendente.nome, COLABS).candidatos;
+    dica.textContent = candidatos.length
+      ? `Possíveis: ${candidatos.map((c) => c.nome).join(", ")}`
+      : "Nenhum nome parecido na TS deste mês";
+    nome.appendChild(dica);
+
+    const select = document.createElement("select");
+    select.setAttribute("aria-label", `Colaborador da TS para ${pendente.nome}`);
+    const chaves = new Set(candidatos.map(chavePessoa));
+    const opcao = (c) => `<option value="${esc(chavePessoa(c))}">${esc(displayColab(c))}</option>`;
+    select.innerHTML = '<option value="">Escolher colaborador…</option>' +
+      (candidatos.length ? `<optgroup label="Sugestões">${candidatos.map(opcao).join("")}</optgroup>` : "") +
+      `<optgroup label="Todos">${COLABS.filter((c) => !chaves.has(chavePessoa(c))).map(opcao).join("")}</optgroup>`;
+    select.addEventListener("change", () => {
+      const colab = COLAB_MAP.get(select.value);
+      const row = colab && localizarLinha(colab.id || colab.nome);
+      if (!row) return;
+      salvarApelido(pendente.nome, colab);
+      preencherPedido(row, pendente);
+      PENDENTES = PENDENTES.filter((p) => p !== pendente);
+      renderizarPendentes();
+      recalcSoma();
+      if (!PENDENTES.length) {
+        msg($("#pedido-status"), "Todos os nomes do pedido foram associados a colaboradores da TS.", "check");
+      }
+    });
+
+    const valor = document.createElement("span");
+    valor.className = "b-val num";
+    valor.textContent = `VR ${fmtBRL(pendente.vr)} · VA ${fmtBRL(pendente.va)}`;
+    linha.append(nome, select, valor);
+    box.appendChild(linha);
+  });
+}
+
+$("#arquivo-pedido").addEventListener("change", async () => {
+  const file = $("#arquivo-pedido").files[0];
+  if (!file) return;
+  try {
+    const XLSX = exigirXLSX();
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+    BLOCOS = C.lerPedidoAlimentacao(workbook);
+    renderizarBlocos(file.name);
+    msg($("#pedido-status"), "", "");
+  } catch (e) {
+    BLOCOS = [];
+    $("#pedido-panel").classList.add("hidden");
+    msg($("#pedido-status"), e.message || "Não foi possível ler o pedido.", "erro");
+  } finally {
+    $("#arquivo-pedido").value = "";
+  }
+});
+
+$("#btn-aplicar-pedido").addEventListener("click", () => {
+  const selecionados = [...document.querySelectorAll("#pedido-blocos input:checked")]
+    .map((input) => BLOCOS[Number(input.value)]);
+  if (!selecionados.length) {
+    msg($("#pedido-status"), "Marque ao menos uma quinzena.", "erro");
+    return;
+  }
+  const itens = C.juntarPedido(selecionados);
+  document.querySelectorAll(".seg-row").forEach((row) => {
+    row.querySelector(".seg-vr").value = "";
+    row.querySelector(".seg-va").value = "";
+  });
+  PENDENTES = [];
+  let preenchidos = 0;
+  itens.forEach((item) => {
+    const { colab } = casarPedido(item.nome);
+    const row = colab && localizarLinha(colab.id || colab.nome);
+    if (row) {
+      preencherPedido(row, item);
+      preenchidos++;
+    } else {
+      PENDENTES.push(item);
+    }
+  });
+  if (selecionados.length === 1 && !$("#periodo").value.trim()) {
+    $("#periodo").value = selecionados[0].titulo || "";
+  }
+  $("#pedido-panel").classList.add("hidden");
+  renderizarPendentes();
+  recalcSoma();
+  const total = itens.reduce((acc, item) => acc + item.vr + item.va, 0);
+  msg(
+    $("#pedido-status"),
+    `${$("#pedido-file-name").textContent}: ${preenchidos} de ${itens.length} funcionários preenchidos ` +
+    `(total do pedido ${fmtBRL(total)}).` +
+    (PENDENTES.length ? ` Escolha o colaborador dos ${PENDENTES.length} nome(s) abaixo.` : ""),
+    PENDENTES.length ? "warn" : "check"
+  );
 });
 
 if (!C || !C.XLSX || typeof C.XLSX.read !== "function") {

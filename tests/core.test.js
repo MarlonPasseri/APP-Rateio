@@ -606,3 +606,147 @@ test("prepararExport monta metadados por tipo", () => {
   assert.match(expP.titulo, /Plano de Saúde/);
   assert.equal(expP.detalheAba, "Detalhe_Segurados");
 });
+
+// ---------------------------------------------------------------- alimentação
+/** Pedido de recarga no formato das planilhas mensais (título, cabeçalho, linhas, TOTAL). */
+function pedidoWorkbook() {
+  const q1 = XLSX.utils.aoa_to_sheet([
+    ["JANEIRO (01 A 15-01) 10 DIAS"],
+    ["FUNCIONÁRIO", "VALOR", "DIAS", "VALE REFEIÇÃO", "VALE ALIMENTAÇÃO", "SALDO LIVRE", "OBSERVAÇÕES"],
+    ["Ana Lima", 50, 10, 500, "x", null, null],
+    ["Bruno Sá", 50, 10, "x", 500, null, "Trabalhou dia 15"],
+    [null, null, null, null, null, null, "linha só com observação"],
+    ["Carla Reis", 50, 10, 250, 125, 125, null],
+    [null, null, null, 750, 625, 125],
+    ["TOTAL (VR + VA)", null, null, 1500],
+  ]);
+  const avulsos = XLSX.utils.aoa_to_sheet([
+    ["EMISSÃO DE CARTÃO"],
+    ["FUNCIONÁRIO", "VALOR", "VALE REFEIÇÃO"],
+    ["Davi Nunes", 50, "EMISSÃO"],
+    ["TOTAL"],
+    [],
+    ["JANEIRO (16 a 31/01)"],
+    ["FUNCIONÁRIO", "VALOR", "DIAS", "VALE ALIMENTAÇÃO"],
+    ["Ana Lima", 50, 2, 100],
+    ["TOTAL (ALELO)", null, null, 100],
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, avulsos, "Planilha2");
+  XLSX.utils.book_append_sheet(wb, q1, "01 a 15-01");
+  return wb;
+}
+
+test("lerPedidoAlimentacao lê blocos, trata 'x', soma saldo livre no VA e ignora blocos zerados", () => {
+  const blocos = C.lerPedidoAlimentacao(pedidoWorkbook());
+  assert.equal(blocos.length, 2);                       // bloco "EMISSÃO" (total 0) é ignorado
+  const [av, q1] = blocos;
+  assert.equal(av.aba, "Planilha2");
+  assert.equal(av.titulo, "JANEIRO (16 a 31/01)");
+  assert.equal(av.avulso, true);
+  assert.equal(q1.titulo, "JANEIRO (01 A 15-01) 10 DIAS");
+  assert.equal(q1.avulso, false);
+  assert.deepEqual(q1.itens.map((i) => [i.nome, i.vr, i.va]), [
+    ["Ana Lima", 500, 0], ["Bruno Sá", 0, 500], ["Carla Reis", 250, 250],
+  ]);
+  assert.equal(q1.itens[1].obs, "Trabalhou dia 15");
+  assert.equal(q1.total_vr, 750);
+  assert.equal(q1.total_va, 750);
+  assert.equal(q1.total, 1500);
+});
+
+test("lerPedidoAlimentacao falha com mensagem clara sem tabela de pedido", () => {
+  assert.throws(() => C.lerPedidoAlimentacao(tsWorkbook([])), /pedido/);
+});
+
+test("juntarPedido soma quem aparece em mais de uma quinzena", () => {
+  const itens = C.juntarPedido(C.lerPedidoAlimentacao(pedidoWorkbook()));
+  const ana = itens.find((i) => i.nome === "Ana Lima");
+  assert.deepEqual([ana.vr, ana.va], [500, 100]);
+  assert.equal(itens.length, 3);
+});
+
+test("casarNome: exato, provável, grafia aproximada e ambíguo", () => {
+  const colabs = [
+    { id: "1", nome: "Armando Neto" }, { id: "2", nome: "Marlon Mello" }, { id: "3", nome: "Marlon Filho" },
+    { id: "4", nome: "Fernanda Brant" }, { id: "5", nome: "Fernanda Romano" }, { id: "6", nome: "Luan Dias" },
+    { id: "7", nome: "Luana Ferreira" }, { id: "8", nome: "Mariana Xavier" }, { id: "9", nome: "Renato Pereira" },
+    { id: "10", nome: "Renata Alves" },
+  ];
+  const r = (n) => C.casarNome(n, colabs);
+  assert.equal(r("marlon  mello").colab.id, "2");
+  assert.equal(r("marlon  mello").exato, true);
+  assert.equal(r("Armando Jose").colab.id, "1");            // único com o primeiro nome
+  assert.equal(r("Armando Jose").exato, false);
+  assert.equal(r("Marlon Soares (FILHO)").colab.id, "3");   // mais tokens em comum
+  assert.equal(r("Mariana de Oliveira Xavier").colab.id, "8");
+  assert.equal(r("Fernanda Brandt").colab.id, "4");         // Brandt ~ Brant
+  assert.equal(r("Luana Machado").colab.id, "7");           // não confunde com "Luan"
+  assert.equal(r("Renata Souza").colab.id, "10");           // não confunde com "Renato"
+  const amb = r("Marlon Passeri");
+  assert.equal(amb.colab, null);
+  assert.deepEqual(amb.candidatos.map((c) => c.id).sort(), ["2", "3"]);
+  assert.equal(r("Zé Ninguém").colab, null);
+});
+
+test("validarAlimentacao exige mês, fornecedor e ao menos um valor", () => {
+  const base = { mes: "2025-01", fornecedor: "iFood", funcionarios: [{ id: "A", nome: "Ana", vr: 100, va: 0 }] };
+  assert.equal(C.validarAlimentacao(base).ok, true);
+  assert.equal(C.validarAlimentacao({ ...base, fornecedor: " " }).ok, false);
+  assert.equal(C.validarAlimentacao({ ...base, mes: "" }).ok, false);
+  const zero = C.validarAlimentacao({ ...base, funcionarios: [{ id: "A", nome: "Ana", vr: 0, va: 0 }] });
+  assert.equal(zero.ok, false);
+  const neg = C.validarAlimentacao({ ...base, funcionarios: [{ id: "A", nome: "Ana", vr: -5, va: 10 }] });
+  assert.ok(neg.erros.some((e) => /negativo/.test(e)));
+});
+
+test("calcularAlimentacao: VR + VA = VALOR FINAL por GP e totais fecham no pedido", () => {
+  const ts = cenarioBase();
+  const func = [
+    { id: "COL001", nome: "Ana Lima", vr: 333.33, va: 100 },
+    { id: "COL002", nome: "Bruno Sá", vr: 0, va: 500 },
+    { id: "COL003", nome: "Carla Reis", vr: 250.01, va: 250 },
+  ];
+  const res = C.calcularAlimentacao(ts, "2025-01", func, 1433.34);
+  assert.equal(res.tipo, "alimentacao");
+  assert.equal(res.total_vr, 583.34);
+  assert.equal(res.total_va, 850);
+  assert.equal(res.total_alimentacao, 1433.34);
+  assert.equal(res.diferenca_boleto, 0);
+  const soma = (k) => C.round(res.tabela_final.reduce((a, r) => a + r[k], 0), 2);
+  assert.equal(soma("valor_final"), 1433.34);
+  assert.equal(soma("vr"), 583.34);
+  assert.equal(soma("va"), 850);
+  for (const r of res.tabela_final) assert.equal(C.round(r.vr + r.va, 2), r.valor_final);
+  const gp2339 = res.tabela_final.find((r) => r.gp === 2339);
+  assert.deepEqual([gp2339.vr, gp2339.va], [0, 500]);
+});
+
+test("calcularAlimentacao: boleto opcional e diferença sinalizada", () => {
+  const ts = cenarioBase();
+  const func = [{ id: "COL002", nome: "Bruno Sá", vr: 100, va: 0 }];
+  assert.equal(C.calcularAlimentacao(ts, "2025-01", func).valor_boleto, null);
+  assert.equal(C.calcularAlimentacao(ts, "2025-01", func, 150).diferenca_boleto, 50);
+});
+
+test("exportação de alimentação: nome do arquivo e colunas VR/VA no .xlsx", () => {
+  const ts = cenarioBase();
+  const res = C.calcularAlimentacao(ts, "2025-01", [
+    { id: "COL001", nome: "Ana Lima", vr: 200, va: 100 },
+  ]);
+  const exp = C.prepararExport(res, { fornecedor: "iFood", lancamento: "86950", periodo: "01/01 a 15/01" });
+  assert.equal(exp.nomeArquivo, "25-01-Alimentacao-iFood-86950.xlsx");
+  assert.equal(C.nomeArquivoAlimentacao("2025-01", "Alelo", "16/01 a 31/01"), "25-01-Alimentacao-Alelo-16_01 a 31_01.xlsx");
+  assert.equal(C.nomeArquivoAlimentacao("2025-01", "Alelo", ""), "25-01-Alimentacao-Alelo.xlsx");
+
+  const wb = XLSX.read(XLSX.write(C.montarWorkbook(res, exp), { type: "buffer", bookType: "xlsx" }), { type: "buffer" });
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets.Rateio, { header: 1 });
+  const cab = aoa.findIndex((r) => r[0] === "GP");
+  assert.deepEqual(aoa[cab], ["GP", "HORAS", "VR", "VA", "VALOR", "PROPORÇÃO", "VALOR FINAL"]);
+  const total = aoa.find((r) => r[0] === "TOTAL");
+  assert.deepEqual([total[2], total[3], total[4], total[6]], [200, 100, 300, 300]);
+  const det = XLSX.utils.sheet_to_json(wb.Sheets.Detalhe_Funcionarios, { header: 1 });
+  const iVr = det[0].indexOf("VR Rateado"), iVa = det[0].indexOf("VA Rateado");
+  assert.ok(iVr > 0 && iVa === iVr + 1);
+  assert.deepEqual([det[1][iVr], det[1][iVa], det[1].at(-1)], [100, 50, "Rateado"]);
+});

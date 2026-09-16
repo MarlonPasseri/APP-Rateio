@@ -1218,8 +1218,147 @@ tbody tr:hover {
   }
 }
 
-body.modo-ferias .so-saude {
+body:not(.modo-saude) .so-saude,
+body:not(.modo-alim) .so-alim,
+body.modo-alim .nao-alim,
+body.modo-ferias .com-boleto {
   display: none !important;
+}
+
+label .opt {
+  margin-left: 4px;
+  color: var(--muted-ink);
+  font-weight: 400;
+}
+
+/* ---- Alimentação: pedido de recarga ---- */
+body.modo-alim .people-table .value-col {
+  width: 150px;
+}
+
+body.modo-alim .seg-row .money-field {
+  width: 128px;
+}
+
+.pedido-panel {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--soft);
+}
+
+.pedido-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.pedido-head small,
+.bloco small {
+  display: block;
+  color: var(--muted-ink);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.blocos {
+  display: grid;
+  gap: 6px;
+}
+
+.blocos summary {
+  padding: 4px 0;
+  color: var(--muted-ink);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.bloco {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.blocos details .bloco {
+  margin-top: 6px;
+}
+
+.bloco:hover {
+  border-color: var(--line-strong);
+}
+
+.bloco:has(input:checked) {
+  border-color: var(--navy);
+  background: #eef5f9;
+}
+
+.bloco input {
+  width: auto;
+  height: auto;
+  margin: 0;
+  accent-color: var(--navy);
+}
+
+.bloco .b-tit {
+  flex: 1;
+  min-width: 0;
+}
+
+.bloco .b-val {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pendentes {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid #f0d19a;
+  border-radius: var(--radius);
+  background: #fffaf0;
+}
+
+.pendentes h3 {
+  margin: 0 0 2px;
+  color: var(--amber);
+  font-size: 13px;
+}
+
+.pendentes > p {
+  margin: 0 0 8px;
+  color: var(--muted-ink);
+  font-size: 12px;
+}
+
+.pendente {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 1.2fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid #f3e2c2;
+}
+
+.pendente small {
+  display: block;
+  color: var(--muted-ink);
+  font-size: 11.5px;
+}
+
+.pendente .b-val {
+  white-space: nowrap;
 }
 
 @media (max-width: 900px) {
@@ -1381,6 +1520,23 @@ body.modo-ferias .so-saude {
 
   .seg-row .money-field {
     width: 118px;
+  }
+
+  body.modo-alim .people-table .value-col {
+    width: 104px;
+  }
+
+  body.modo-alim .seg-row .money-field {
+    width: 96px;
+  }
+
+  .pedido-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pendente {
+    grid-template-columns: 1fr;
   }
 
   .summary-bar {

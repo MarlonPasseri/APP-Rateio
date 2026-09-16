@@ -526,12 +526,11 @@
     const porId = new Map(), porNome = new Map();
     let totalItens = 0;
     for (const s of itens) {
-      const v = toFloat(s.valor);
-      totalItens += v;
-      if (s.id) porId.set(String(s.id).trim(), v);
-      if (s.nome) porNome.set(norm(s.nome), v);
+      totalItens += toFloat(s.valor);
+      if (s.id) porId.set(String(s.id).trim(), s);
+      if (s.nome) porNome.set(norm(s.nome), s);
     }
-    const valorDe = (l) => {
+    const itemDe = (l) => {
       if (l.id && porId.has(l.id)) return porId.get(l.id);
       const n = norm(l.nome);
       if (porNome.has(n)) return porNome.get(n);
@@ -542,12 +541,13 @@
     const comHoras = new Set();
     for (const l of ts.linhas) {
       if (l.mes_key !== mk) continue;
-      const v = valorDe(l);
-      if (v === null) continue;
+      const item = itemDe(l);
+      if (item === null) continue;
+      const v = toFloat(item.valor);
       comHoras.add(l.id || norm(l.nome));
       temp2.push({
         id: l.id, nome: l.nome, gp: l.gp, horas: l.horas, proporcao: l.proporcao,
-        valor_pessoa: v, valor_linha: v * l.proporcao,
+        valor_pessoa: v, valor_linha: v * l.proporcao, item,
       });
     }
 
@@ -669,9 +669,263 @@
     return `${ano.slice(2)}-${mes}-Ferias-${ident}.xlsx`;
   }
 
+  // ---- Alimentação: leitura da planilha do pedido de recarga (VR/VA) ----
+  // Cada aba do pedido pode ter um ou mais blocos: um título (ex.: "AGOSTO (16 a 31-08) 11 DIAS"),
+  // o cabeçalho FUNCIONÁRIO | VALOR | DIAS | VALE REFEIÇÃO | VALE ALIMENTAÇÃO | SALDO LIVRE | OBSERVAÇÕES
+  // e as linhas até "TOTAL". Células com "x" valem zero. SALDO LIVRE é somado ao VA (como no CONTROLE).
+  const COLUNAS_PEDIDO = {
+    nome: ["funcionario", "funcionaria", "colaborador", "nome"],
+    valor_dia: ["valor", "valor dia", "valor/dia"],
+    dias: ["dias", "qtd dias"],
+    vr: ["vale refeicao", "refeicao", "vr"],
+    va: ["vale alimentacao", "alimentacao", "va"],
+    livre: ["saldo livre", "livre"],
+    obs: ["observacoes", "observacao", "obs"],
+  };
+
+  const _num = (v) => (typeof v === "number" && isFinite(v) ? v : 0);
+
+  function lerPedidoAlimentacao(workbook) {
+    if (!workbook || !Array.isArray(workbook.SheetNames)) {
+      throw new Error("Arquivo inválido ou não é uma planilha.");
+    }
+    const blocos = [];
+    const tabelasPorAba = new Map();
+    for (const nomeAba of workbook.SheetNames) {
+      const aoa = XLSX.utils.sheet_to_json(workbook.Sheets[nomeAba],
+        { header: 1, raw: true, defval: null, blankrows: true });
+      let bloco = null, titulo = "";
+      const fechar = () => {
+        if (bloco && bloco.itens.length) {
+          bloco.total_vr = round(bloco.itens.reduce((a, i) => a + i.vr, 0), 2);
+          bloco.total_va = round(bloco.itens.reduce((a, i) => a + i.va, 0), 2);
+          bloco.total = round(bloco.total_vr + bloco.total_va, 2);
+          if (bloco.total > 0) blocos.push(bloco);
+        }
+        bloco = null;
+      };
+      for (const row of aoa) {
+        const cells = (row || []).map((c) => (typeof c === "string" ? c.trim() : c));
+        const textos = cells.filter((c) => c !== null && c !== "");
+        if (!textos.length) continue;
+
+        // cabeçalho?
+        const idx = {};
+        cells.forEach((c, i) => {
+          if (typeof c !== "string") return;
+          const n = norm(c);
+          for (const [k, sin] of Object.entries(COLUNAS_PEDIDO)) if (!(k in idx) && sin.includes(n)) idx[k] = i;
+        });
+        if ("nome" in idx && ("vr" in idx || "va" in idx)) {
+          fechar();
+          tabelasPorAba.set(nomeAba, (tabelasPorAba.get(nomeAba) || 0) + 1);
+          bloco = { aba: nomeAba, titulo, mapa: idx, itens: [] };
+          titulo = "";
+          continue;
+        }
+
+        const nome = bloco ? cells[bloco.mapa.nome] : null;
+        const primeiro = norm(textos[0]);
+        if (bloco && (primeiro.startsWith("total") || (typeof nome === "string" && norm(nome).startsWith("total")))) {
+          fechar();
+          continue;
+        }
+        if (!bloco || typeof nome !== "string" || !nome) {
+          // texto solto (fora da coluna de observações) é candidato a título do próximo bloco
+          const soObs = bloco && "obs" in bloco.mapa && cells[bloco.mapa.obs] === textos[0];
+          if (textos.length === 1 && typeof textos[0] === "string" && !soObs) { fechar(); titulo = textos[0]; }
+          continue;
+        }
+        const m = bloco.mapa;
+        const get = (k) => (k in m ? cells[m[k]] : null);
+        const vr = _num(get("vr"));
+        const va = _num(get("va")) + _num(get("livre"));
+        bloco.itens.push({
+          nome,
+          valor_dia: _num(get("valor_dia")),
+          dias: _num(get("dias")),
+          vr: round(vr, 2),
+          va: round(va, 2),
+          obs: get("obs") !== null && get("obs") !== undefined ? String(get("obs")) : "",
+        });
+      }
+      fechar();
+    }
+    // abas com várias tabelas (ex.: "Planilha2") guardam pedidos avulsos/históricos
+    blocos.forEach((b) => { delete b.mapa; b.avulso = tabelasPorAba.get(b.aba) > 1; });
+    if (!blocos.length) {
+      throw new Error(
+        "Não encontrei no arquivo uma tabela de pedido " +
+        "(colunas FUNCIONÁRIO e VALE REFEIÇÃO / VALE ALIMENTAÇÃO)."
+      );
+    }
+    return blocos;
+  }
+
+  // Junta os itens de um ou mais blocos, somando quem aparece em mais de um.
+  function juntarPedido(blocos) {
+    const porNome = new Map();
+    for (const b of blocos || []) {
+      for (const i of b.itens) {
+        const k = norm(i.nome);
+        const cur = porNome.get(k) || { nome: i.nome, vr: 0, va: 0 };
+        cur.vr = round(cur.vr + i.vr, 2);
+        cur.va = round(cur.va + i.va, 2);
+        porNome.set(k, cur);
+      }
+    }
+    return [...porNome.values()].filter((i) => i.vr + i.va > 0);
+  }
+
+  // ---- Casamento de nomes do pedido com os colaboradores da TS ----
+  const STOP = new Set(["da", "de", "do", "das", "dos", "e"]);
+  const tokens = (s) => norm(s).replace(/[^a-z0-9 ]/g, " ").split(" ").filter((t) => t && !STOP.has(t));
+
+  function _dist1(a, b) {
+    // true se a e b diferem por no máximo 1 edição (inserção, remoção ou troca)
+    if (a === b) return true;
+    if (Math.abs(a.length - b.length) > 1) return false;
+    let i = 0, j = 0, dif = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) { i++; j++; continue; }
+      if (++dif > 1) return false;
+      if (a.length > b.length) i++;
+      else if (b.length > a.length) j++;
+      else { i++; j++; }
+    }
+    return dif + (a.length - i) + (b.length - j) <= 1;
+  }
+
+  const _tokIgual = (a, b) => a === b || (a.length >= 4 && b.length >= 4 && _dist1(a, b));
+
+  // Retorna { colab, exato, candidatos }: colab é o colaborador casado (null se não houver ou
+  // se for ambíguo); exato indica nome idêntico (senão o casamento é só provável).
+  function casarNome(nome, colabs) {
+    const lista = colabs || [];
+    const alvo = norm(nome);
+    const iguais = lista.filter((c) => norm(c.nome) === alvo);
+    if (iguais.length === 1) return { colab: iguais[0], exato: true, candidatos: iguais };
+
+    const tk = tokens(nome);
+    if (!tk.length) return { colab: null, exato: false, candidatos: [] };
+    const comTokens = lista.map((c) => ({ c, t: tokens(c.nome) })).filter((x) => x.t.length);
+    // primeiro nome idêntico; só aceita grafia aproximada se nenhum for idêntico
+    let mesmos = comTokens.filter((x) => x.t[0] === tk[0]);
+    if (!mesmos.length) mesmos = comTokens.filter((x) => _tokIgual(x.t[0], tk[0]));
+    const cands = mesmos.map((x) => ({ c: x.c, score: tk.filter((a) => x.t.some((b) => _tokIgual(a, b))).length }));
+    if (!cands.length) return { colab: null, exato: false, candidatos: [] };
+    if (cands.length === 1) return { colab: cands[0].c, exato: false, candidatos: [cands[0].c] };
+
+    const max = Math.max(...cands.map((x) => x.score));
+    const melhores = cands.filter((x) => x.score === max);
+    if (melhores.length === 1 && max >= 2) return { colab: melhores[0].c, exato: false, candidatos: [melhores[0].c] };
+    return { colab: null, exato: false, candidatos: melhores.map((x) => x.c) };
+  }
+
+  // ---- Rateio de Alimentação (VR + VA por funcionário; VALOR FINAL = VALOR) ----
+  function validarAlimentacao(d) {
+    if (!d || typeof d !== "object") return { ok: false, erros: ["Dados de entrada ausentes."] };
+    const erros = [];
+    if (!d.mes) erros.push("Selecione o mês de competência.");
+    if (!d.fornecedor || !String(d.fornecedor).trim()) erros.push("Informe o fornecedor (ex.: iFood, Alelo).");
+    const funcs = (Array.isArray(d.funcionarios) ? d.funcionarios : []).map((f) => ({
+      ...f, valor: toFloat(f.vr) + toFloat(f.va),
+    }));
+    for (const f of d.funcionarios || []) {
+      if (toFloat(f.vr) < 0 || toFloat(f.va) < 0) erros.push(`Valor negativo informado para "${f.nome || "funcionário"}".`);
+    }
+    erros.push(..._checarLista(funcs, "funcionário"));
+    if (d.valor_boleto !== undefined && d.valor_boleto !== null && d.valor_boleto !== "") {
+      const vb = Number(d.valor_boleto);
+      if (!isFinite(vb) || vb < 0) erros.push("O valor do boleto é inválido.");
+    }
+    return { ok: erros.length === 0, erros: [...new Set(erros)] };
+  }
+
+  function calcularAlimentacao(ts, mk, funcionarios, valorBoleto) {
+    const itens = funcionarios.map((f) => ({
+      id: f.id, nome: f.nome, vr: toFloat(f.vr), va: toFloat(f.va), valor: toFloat(f.vr) + toFloat(f.va),
+    }));
+    const a = _ratear(ts, mk, itens);
+
+    const vrPorGp = new Map();
+    for (const r of a.temp2) {
+      r.vr_linha = r.item.vr * r.proporcao;
+      r.va_linha = r.item.va * r.proporcao;
+      vrPorGp.set(r.gp, (vrPorGp.get(r.gp) || 0) + r.vr_linha);
+    }
+
+    const tabelaFinal = a.gps.map((gp) => {
+      const valor = a.valorPorGp.get(gp);
+      const prop = a.totalValor ? valor / a.totalValor : 0;
+      return {
+        gp, horas: round(a.horasPorGp.get(gp) || 0, 4),
+        vr: vrPorGp.get(gp) || 0,
+        valor: round(valor, 2), proporcao: prop, valor_final: round(valor, 2),
+      };
+    });
+    _ajustarCentavos(tabelaFinal, round(a.totalValor, 2));
+    // VR arredondado por GP (centavos no maior VR); VA fecha a linha: VR + VA = VALOR FINAL
+    const vrRateado = round(a.temp2.reduce((s, r) => s + r.vr_linha, 0), 2);
+    tabelaFinal.forEach((r) => { r.vr = round(r.vr, 2); });
+    const difVr = round(vrRateado - tabelaFinal.reduce((s, r) => s + r.vr, 0), 2);
+    if (tabelaFinal.length && difVr !== 0) {
+      const maior = tabelaFinal.reduce((m, r) => (r.vr > m.vr ? r : m), tabelaFinal[0]);
+      maior.vr = round(maior.vr + difVr, 2);
+    }
+    for (const r of tabelaFinal) r.va = round(r.valor_final - r.vr, 2);
+
+    const temBoleto = valorBoleto !== undefined && valorBoleto !== null && valorBoleto !== "" && Number(valorBoleto) > 0;
+    const totalItens = round(a.totalItens, 2);
+    return {
+      tipo: "alimentacao",
+      mes_key: mk,
+      total_vr: round(itens.reduce((s, i) => s + i.vr, 0), 2),
+      total_va: round(itens.reduce((s, i) => s + i.va, 0), 2),
+      total_alimentacao: totalItens,
+      total_valor_rateado: round(a.totalValor, 2),
+      valor_boleto: temBoleto ? round(Number(valorBoleto), 2) : null,
+      diferenca_boleto: temBoleto ? round(Number(valorBoleto) - totalItens, 2) : 0,
+      qtd_gps: tabelaFinal.length,
+      qtd_funcionarios: itens.length,
+      sem_horas: a.semHoras,
+      itens_sem_horas: a.itensSemHoras,
+      proporcao_suspeita: a.proporcaoSuspeita,
+      temp2: a.temp2, tabela_final: tabelaFinal,
+    };
+  }
+
+  function nomeArquivoAlimentacao(mk, fornecedor, ident) {
+    const [ano, mes] = mk.split("-");
+    const partes = [`${ano.slice(2)}-${mes}`, "Alimentacao", sanitizar(fornecedor || "")];
+    if (ident && String(ident).trim()) partes.push(sanitizar(ident));
+    return partes.filter(Boolean).join("-") + ".xlsx";
+  }
+
   // ---- Preparação da exportação (metadados + nome do arquivo, por tipo) ----
   function prepararExport(res, extra) {
     extra = extra || {};
+    if (res.tipo === "alimentacao") {
+      const info = [
+        ["Fornecedor", extra.fornecedor],
+        ["Nº do lançamento", extra.lancamento || ""],
+        ["Período", extra.periodo || ""],
+        ["Mês de competência", res.mes_key],
+        ["Total VR", res.total_vr],
+        ["Total VA", res.total_va],
+        ["Total do pedido", res.total_alimentacao],
+      ];
+      if (res.valor_boleto !== null) info.push(["Valor do boleto", res.valor_boleto]);
+      return {
+        titulo: "Rateio de Alimentação (VR/VA) por GP",
+        info,
+        extraCols: [{ titulo: "VR", key: "vr" }, { titulo: "VA", key: "va" }],
+        detalheAba: "Detalhe_Funcionarios",
+        colValor: "Valor VR+VA",
+        detalheExtra: [{ titulo: "VR Rateado", key: "vr_linha" }, { titulo: "VA Rateado", key: "va_linha" }],
+        nomeArquivo: nomeArquivoAlimentacao(res.mes_key, extra.fornecedor, extra.lancamento || extra.periodo),
+      };
+    }
     if (res.tipo === "ferias") {
       return {
         titulo: "Rateio de Férias por GP",
@@ -701,47 +955,53 @@
     const wb = XLSX.utils.book_new();
     const tf = res.tabela_final;
     const info = meta.info || [];
+    const extra = meta.extraCols || [];
+    const soma = (k, d) => round(tf.reduce((a, r) => a + (r[k] || 0), 0), d);
 
     const aoa = [[meta.titulo]];
     info.forEach((r) => aoa.push(r));
     aoa.push([]);
     const cab = aoa.length;                 // índice da linha de cabeçalho da tabela
-    aoa.push(["GP", "HORAS", "VALOR", "PROPORÇÃO", "VALOR FINAL"]);
-    tf.forEach((r) => aoa.push([r.gp, r.horas, r.valor, r.proporcao, r.valor_final]));
+    aoa.push(["GP", "HORAS", ...extra.map((c) => c.titulo), "VALOR", "PROPORÇÃO", "VALOR FINAL"]);
+    tf.forEach((r) => aoa.push([r.gp, r.horas, ...extra.map((c) => r[c.key]), r.valor, r.proporcao, r.valor_final]));
     aoa.push([
-      "TOTAL",
-      round(tf.reduce((a, r) => a + r.horas, 0), 4),
-      round(tf.reduce((a, r) => a + r.valor, 0), 2),
-      round(tf.reduce((a, r) => a + r.proporcao, 0), 6),
-      round(tf.reduce((a, r) => a + r.valor_final, 0), 2),
+      "TOTAL", soma("horas", 4), ...extra.map((c) => soma(c.key, 2)),
+      soma("valor", 2), soma("proporcao", 6), soma("valor_final", 2),
     ]);
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 16 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 16 }];
+    ws["!cols"] = [{ wch: 20 }, { wch: 12 }, ...extra.map(() => ({ wch: 14 })), { wch: 16 }, { wch: 14 }, { wch: 16 }];
     const fmt = (r, c, z) => { const ref = XLSX.utils.encode_cell({ r, c }); if (ws[ref]) ws[ref].z = z; };
     info.forEach((r, i) => { if (typeof r[1] === "number") fmt(1 + i, 1, "#,##0.00"); });
     const fim = cab + tf.length + 1;
-    for (let r = cab + 1; r <= fim; r++) { fmt(r, 2, "#,##0.00"); fmt(r, 3, "0.0000%"); fmt(r, 4, "#,##0.00"); }
+    const cValor = 2 + extra.length;
+    for (let r = cab + 1; r <= fim; r++) {
+      extra.forEach((_, i) => fmt(r, 2 + i, "#,##0.00"));
+      fmt(r, cValor, "#,##0.00"); fmt(r, cValor + 1, "0.0000%"); fmt(r, cValor + 2, "#,##0.00");
+    }
     XLSX.utils.book_append_sheet(wb, ws, "Rateio");
 
+    const dExtra = meta.detalheExtra || [];
     const aoa2 = [[
       "Id Colaborador", "Nome Colaborador", "GP", "Horas Trabalhadas",
-      "Proporção de Hora", meta.colValor || "Valor", "Valor Rateado (Valor×Prop.)", "Status",
+      "Proporção de Hora", meta.colValor || "Valor", "Valor Rateado (Valor×Prop.)",
+      ...dExtra.map((c) => c.titulo), "Status",
     ]];
     res.temp2.forEach((r) =>
       aoa2.push([
         r.id, r.nome, r.gp, r.horas, r.proporcao,
-        round(r.valor_pessoa, 2), round(r.valor_linha, 2), "Rateado",
+        round(r.valor_pessoa, 2), round(r.valor_linha, 2),
+        ...dExtra.map((c) => round(r[c.key] || 0, 2)), "Rateado",
       ]));
     (res.itens_sem_horas || []).forEach((item) =>
       aoa2.push([
         item.id, item.nome, "", 0, 0,
-        round(item.valor, 2), 0, "Sem horas na TS",
+        round(item.valor, 2), 0, ...dExtra.map(() => 0), "Sem horas na TS",
       ]));
     const ws2 = XLSX.utils.aoa_to_sheet(aoa2);
     ws2["!cols"] = [
       { wch: 16 }, { wch: 28 }, { wch: 10 }, { wch: 16 },
-      { wch: 16 }, { wch: 14 }, { wch: 22 }, { wch: 18 },
+      { wch: 16 }, { wch: 14 }, { wch: 22 }, ...dExtra.map(() => ({ wch: 14 })), { wch: 18 },
     ];
     XLSX.utils.book_append_sheet(wb, ws2, meta.detalheAba || "Detalhe");
 
@@ -750,11 +1010,12 @@
 
   return {
     XLSX, COLUNAS, OBRIGATORIAS, COLUNAS_PESSOAS,
-    norm, mesKey, toFloat, round, sanitizar, nomeArquivoSaida, nomeArquivoFerias,
+    norm, mesKey, toFloat, round, sanitizar, nomeArquivoSaida, nomeArquivoFerias, nomeArquivoAlimentacao,
     carregarTS, colaboradores, encontrarColaborador, carregarPessoas, parsePessoasColadas,
     parseBoletoSulAmerica, parseBoletoBradesco, parseBoletoPdfText, combinarBoletos,
-    validarEntrada, validarFerias,
-    calcularPlanoSaude, calcularFerias,
+    lerPedidoAlimentacao, juntarPedido, casarNome,
+    validarEntrada, validarFerias, validarAlimentacao,
+    calcularPlanoSaude, calcularFerias, calcularAlimentacao,
     prepararExport, montarWorkbook,
   };
 });

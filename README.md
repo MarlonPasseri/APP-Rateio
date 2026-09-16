@@ -2,8 +2,8 @@
 
 Aplicativo para calcular o **rateio de custos por GP (Centro de Custo)**, rodando
 **100% no navegador** (sem servidor). Estão implementados os rateios de
-**Plano de Saúde** e **Férias**; Rescisão e 13º permanecem preparados para
-evoluções futuras.
+**Plano de Saúde**, **Férias** e **Alimentação (VR/VA)**; Rescisão e 13º
+permanecem preparados para evoluções futuras.
 
 **App online:** https://marlonpasseri.github.io/APP-Rateio/
 
@@ -69,6 +69,24 @@ Também é possível usar **Colar valores** com duas colunas copiadas do Excel:
 nome ou ID do colaborador na primeira coluna e valor na segunda. Os filtros
 **Todos**, **Com valor** e **Sem valor** ajudam a revisar listas grandes.
 
+### Alimentação (VR/VA)
+
+1. **Tipo de rateio** → Alimentação; carregue a planilha TS.
+2. **Dados do lançamento** → fornecedor (iFood, Alelo…), nº do lançamento,
+   período, mês de competência e, opcionalmente, o valor do boleto (para
+   conferência).
+3. **Importar pedido** → selecione a planilha do pedido de recarga
+   (`AA-MM.xlsx`), marque a(s) quinzena(s) do lançamento e clique em
+   **Usar selecionadas**. Os campos VR e VA de cada colaborador são
+   preenchidos; também dá para digitá-los manualmente.
+4. Os nomes do pedido são associados automaticamente aos colaboradores da TS
+   (ex.: "Armando Jose" → Armando Neto, "Fernanda Brandt" → Fernanda Brant).
+   Quando há ambiguidade (ex.: "Marlon Passeri" → Marlon Mello ou Marlon
+   Filho?), o nome aparece num quadro de pendências para você escolher; a
+   escolha fica salva **neste navegador** para os próximos meses.
+5. **Calcular** → tabela por GP com VR, VA e total; **Baixar planilha** gera
+   `AA-MM-Alimentacao-Fornecedor-lancamento.xlsx`.
+
 ### Rodar localmente (opcional / offline)
 
 Duplo clique em **`Abrir_Local.bat`** (serve a pasta `docs/` em
@@ -125,6 +143,22 @@ O app procura, em qualquer aba do arquivo, um cabeçalho com as colunas:
 A planilha exportada traz a aba **Rateio** (tabela final) e a aba
 **Detalhe_Segurados** (auditoria: cada segurado × GP).
 
+## Lógica do rateio (Alimentação)
+
+1. **Pedido**: em cada aba, a tabela com FUNCIONÁRIO e VALE REFEIÇÃO /
+   VALE ALIMENTAÇÃO (e SALDO LIVRE, somado ao VA) até a linha TOTAL. Células
+   com "x" valem zero. Abas com várias tabelas (ex.: `Planilha2`) aparecem
+   recolhidas como "pedidos avulsos". Quem aparece em mais de uma quinzena
+   selecionada tem os valores somados.
+2. Valor de cada funcionário = VR + VA, distribuído pelos GPs do mês de
+   competência conforme a **Proporção de Hora** (mesmo motor das Férias).
+3. **VALOR FINAL = VALOR** (a soma fecha no total do pedido). VR e VA também são
+   rateados por GP, com VR + VA = VALOR FINAL em cada linha.
+4. Avisos: diferença entre boleto e pedido, funcionários sem horas na TS e
+   proporções que não somam 100%.
+
+A aba **Detalhe_Funcionarios** traz cada funcionário × GP com VR e VA rateados.
+
 ## Segurança
 
 - **Processamento local:** a planilha e o boleto PDF são lidos e o resultado é
@@ -133,6 +167,8 @@ A planilha exportada traz a aba **Rateio** (tabela final) e a aba
 - **CSP rígido** + **SRI** no SheetJS (impede adulteração da biblioteca).
 - **HTTPS** automático no GitHub Pages.
 - **Sem dados no repositório:** `.gitignore` bloqueia planilhas, CSVs e PDFs.
+- **Armazenamento local:** apenas o vínculo "nome no pedido → colaborador da TS"
+  (Alimentação) é guardado no `localStorage` do navegador; nenhum valor é salvo.
 
 > Por ser um site público e estático, não há login. Como o app não armazena nem
 > transmite dados, o risco se limita ao uso da calculadora por terceiros.
