@@ -75,15 +75,24 @@ nome ou ID do colaborador na primeira coluna e valor na segunda. Os filtros
 2. **Dados do lançamento** → fornecedor (iFood, Alelo…), nº do lançamento,
    período, mês de competência e, opcionalmente, o valor do boleto (para
    conferência).
-3. **Importar pedido** → selecione a planilha do pedido de recarga
-   (`AA-MM.xlsx`), marque a(s) quinzena(s) do lançamento e clique em
-   **Usar selecionadas**. Os campos VR e VA de cada colaborador são
-   preenchidos; também dá para digitá-los manualmente.
-4. Os nomes do pedido são associados automaticamente aos colaboradores da TS
-   (ex.: "Armando Jose" → Armando Neto, "Fernanda Brandt" → Fernanda Brant).
-   Quando há ambiguidade (ex.: "Marlon Passeri" → Marlon Mello ou Marlon
-   Filho?), o nome aparece num quadro de pendências para você escolher; a
-   escolha fica salva **neste navegador** para os próximos meses.
+3. **Importar planilha** → aceita os dois formatos:
+   - **Planilha de CONTROLE** (recomendado): lista os **lançamentos** (boletos)
+     do mais recente para o mais antigo, com busca por número, fornecedor,
+     período ou competência. Ao marcar um lançamento e clicar em
+     **Usar selecionadas**, o app preenche fornecedor, nº do lançamento,
+     período, mês de competência e valor do boleto, e lança **apenas os valores
+     daquele boleto** para cada colaborador.
+   - **Pedido de recarga** (`AA-MM.xlsx`): marque a(s) quinzena(s) e clique em
+     **Usar selecionadas**.
+
+   Nos dois casos, os campos VR e VA das pessoas são preenchidos; também dá para
+   digitá-los manualmente.
+4. Associação com a TS: quando a planilha traz o **Id do colaborador** (caso do
+   CONTROLE), ele manda — nome diferente não atrapalha. Sem Id, o nome é
+   associado automaticamente (ex.: "Armando Jose" → Armando Neto, "Fernanda
+   Brandt" → Fernanda Brant); havendo ambiguidade (ex.: "Marlon Passeri" →
+   Marlon Mello ou Marlon Filho?), o nome aparece num quadro de pendências para
+   você escolher, e a escolha fica salva **neste navegador**.
 5. **Calcular** → tabela por GP com VR, VA e total; **Baixar planilha** gera
    `AA-MM-Alimentacao-Fornecedor-lancamento.xlsx`.
 
@@ -145,13 +154,23 @@ A planilha exportada traz a aba **Rateio** (tabela final) e a aba
 
 ## Lógica do rateio (Alimentação)
 
+0. **CONTROLE (por lançamento)**: as abas de pessoas (IFOOD/ALELO) trazem
+   ID_COLABORADOR, COLABORADOR, MÊS, QUINZENA, VALE REFEIÇÃO, VALE ALIMENTAÇÃO e
+   o número do lançamento. Cada **lançamento é um boleto** e vira um rateio: só
+   entram as linhas daquele número — nunca o histórico da pessoa. No ALELO, VR e
+   VA são boletos separados (`LANÇAMENGO_REF` e `LANÇAMENTO_ALI`). A aba
+   **CONTROLE** dá fornecedor (MEIO), tipo, período, competência e valor do
+   boleto. Um número repetido em fornecedores diferentes é tratado como dois
+   lançamentos distintos; se um lançamento não tiver linha na aba CONTROLE ou a
+   soma das pessoas não bater com o boleto, o app avisa.
 1. **Pedido**: em cada aba, a tabela com FUNCIONÁRIO e VALE REFEIÇÃO /
    VALE ALIMENTAÇÃO (e SALDO LIVRE, somado ao VA) até a linha TOTAL. Células
    com "x" valem zero. Abas com várias tabelas (ex.: `Planilha2`) aparecem
    recolhidas como "pedidos avulsos". Quem aparece em mais de uma quinzena
    selecionada tem os valores somados.
-2. Valor de cada funcionário = VR + VA, distribuído pelos GPs do mês de
-   competência conforme a **Proporção de Hora** (mesmo motor das Férias).
+2. Valor de cada funcionário = VR + VA **daquele lançamento/quinzena**,
+   distribuído pelos GPs do mês de competência conforme a **Proporção de Hora**
+   (mesmo motor das Férias).
 3. **VALOR FINAL = VALOR** (a soma fecha no total do pedido). VR e VA também são
    rateados por GP, com VR + VA = VALOR FINAL em cada linha.
 4. Avisos: diferença entre boleto e pedido, funcionários sem horas na TS e

@@ -1267,6 +1267,28 @@ body.modo-alim .seg-row .money-field {
 .blocos {
   display: grid;
   gap: 6px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.pedido-panel .search-field {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.bloco .b-num {
+  min-width: 68px;
+  color: var(--navy);
+  font-variant-numeric: tabular-nums;
+}
+
+.bloco.alerta {
+  border-color: #f0d19a;
+  background: #fffaf0;
+}
+
+.bloco .aviso {
+  color: var(--amber);
 }
 
 .blocos summary {

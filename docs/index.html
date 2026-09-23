@@ -14,7 +14,7 @@
            form-action 'none'" />
 <meta name="referrer" content="no-referrer" />
 <title>Rateio por GP</title>
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 <header class="app-header">
@@ -240,11 +240,11 @@
         </div>
         <div class="action-group">
           <input class="visually-hidden" type="file" id="arquivo-pedido" accept=".xlsx,.xlsm" />
-          <label class="btn secondary compact so-alim" for="arquivo-pedido" title="Ler a planilha do pedido de recarga (VR/VA)">
+          <label class="btn secondary compact so-alim" for="arquivo-pedido" title="Ler a planilha de CONTROLE (por lançamento) ou o pedido de recarga da quinzena">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5M12 3v12"/>
             </svg>
-            Importar pedido
+            Importar planilha
           </label>
           <input class="visually-hidden" type="file" id="pessoas-arquivo" accept=".xlsx,.xlsm,.csv" />
           <label class="btn secondary compact nao-alim" for="pessoas-arquivo" title="Preencher valores usando outra planilha">
@@ -269,8 +269,14 @@
 
       <div class="pedido-panel so-alim hidden" id="pedido-panel">
         <div class="pedido-head">
-          <span><strong id="pedido-file-name"></strong><small>Marque a(s) quinzena(s) deste lançamento. Saldo livre entra como VA.</small></span>
+          <span><strong id="pedido-file-name"></strong><small id="pedido-ajuda">Marque o que deve entrar neste rateio.</small></span>
           <button class="btn primary compact" id="btn-aplicar-pedido" type="button">Usar selecionadas</button>
+        </div>
+        <div class="search-field compact-search hidden" id="pedido-busca-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+          </svg>
+          <input id="pedido-busca" type="search" placeholder="Buscar lançamento, fornecedor, período ou competência" autocomplete="off" />
         </div>
         <div class="blocos" id="pedido-blocos"></div>
       </div>
@@ -395,9 +401,9 @@
 <script src="vendor/xlsx.full.min.js"
   integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
   crossorigin="anonymous"></script>
-<script src="core.js?v=8"></script>
+<script src="core.js?v=9"></script>
 <script src="vendor/pdf.min.js?v=6.2.108"></script>
 <script src="pdf-reader.js?v=2"></script>
-<script src="app.js?v=12"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>

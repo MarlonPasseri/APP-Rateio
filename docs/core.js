@@ -762,19 +762,208 @@
     return blocos;
   }
 
-  // Junta os itens de um ou mais blocos, somando quem aparece em mais de um.
+  // Junta os itens de um ou mais blocos/lançamentos, somando quem aparece em mais de um.
   function juntarPedido(blocos) {
-    const porNome = new Map();
+    const porPessoa = new Map();
     for (const b of blocos || []) {
       for (const i of b.itens) {
-        const k = norm(i.nome);
-        const cur = porNome.get(k) || { nome: i.nome, vr: 0, va: 0 };
+        const k = String(i.id || "").trim() || norm(i.nome);
+        const cur = porPessoa.get(k) || { id: i.id || "", nome: i.nome, vr: 0, va: 0 };
         cur.vr = round(cur.vr + i.vr, 2);
         cur.va = round(cur.va + i.va, 2);
-        porNome.set(k, cur);
+        if (!cur.id && i.id) cur.id = i.id;
+        porPessoa.set(k, cur);
       }
     }
-    return [...porNome.values()].filter((i) => i.vr + i.va > 0);
+    return [...porPessoa.values()].filter((i) => i.vr + i.va > 0);
+  }
+
+  // ---- Alimentação: leitura da planilha de CONTROLE (um rateio por lançamento/boleto) ----
+  // Abas de pessoas (IFOOD/ALELO): ID_COLABORADOR | COLABORADOR | MÊS | QUINZENA | VALE REFEIÇÃO |
+  // VALE ALIMENTAÇÃO | (TOTAL) | N_LANCAMENTO  — no ALELO o VR e o VA são boletos separados
+  // (LANÇAMENGO_REF e LANÇAMENTO_ALI). Aba CONTROLE: metadados de cada lançamento.
+  const COLUNAS_PESSOAS_CONTROLE = {
+    id: ["id_colaborador", "id colaborador", "id", "matricula"],
+    nome: ["colaborador", "funcionario", "nome colaborador", "nome"],
+    mes: ["mes", "mes_competencia", "mes competencia", "competencia"],
+    quinzena: ["quinzena"],
+    vr: ["vale refeicao", "refeicao", "vr"],
+    va: ["vale alimentacao", "alimentacao", "va"],
+    lanc: ["n_lancamento", "n lancamento", "numero do lancamento", "lancamento"],
+    lanc_vr: ["lancamengo_ref", "lancamento_ref", "lancamento ref", "lancamengo ref"],
+    lanc_va: ["lancamento_ali", "lancamento ali", "lancamengo_ali"],
+  };
+  const COLUNAS_LANCAMENTOS = {
+    numero: ["n_lancamento", "n lancamento", "numero do lancamento", "lancamento"],
+    vencimento: ["vencimento"],
+    competencia: ["mes_competencia", "mes competencia", "competencia"],
+    valor: ["valor"],
+    periodo: ["periodo"],
+    meio: ["meio", "fornecedor"],
+    tipo: ["tipo"],
+    obs: ["obs", "observacoes", "observacao"],
+  };
+  const FORNECEDORES = { ifood: "iFood", alelo: "Alelo", sodexo: "Sodexo", ticket: "Ticket", vr: "VR" };
+
+  function _mapaColunas(cells, colunas) {
+    const idx = {};
+    cells.forEach((c, i) => {
+      if (typeof c !== "string") return;
+      const n = norm(c);
+      for (const [k, sin] of Object.entries(colunas)) if (!(k in idx) && sin.includes(n)) idx[k] = i;
+    });
+    return idx;
+  }
+
+  const _chaveLanc = (v) => {
+    if (v === null || v === undefined || v === "") return "";
+    return (typeof v === "number" ? String(Math.round(v)) : String(v)).trim();
+  };
+  const _texto = (v) => (v === null || v === undefined ? "" : String(v).trim());
+  const _dataBR = (v) => {
+    if (v instanceof Date && !isNaN(v)) {
+      return `${String(v.getDate()).padStart(2, "0")}/${String(v.getMonth() + 1).padStart(2, "0")}/${v.getFullYear()}`;
+    }
+    return _texto(v);
+  };
+  const fornecedorBonito = (s) => FORNECEDORES[norm(s)] || _texto(s);
+
+  function lerControleAlimentacao(workbook) {
+    if (!workbook || !Array.isArray(workbook.SheetNames)) {
+      throw new Error("Arquivo inválido ou não é uma planilha.");
+    }
+    const metas = new Map();        // número do lançamento -> metadados da aba CONTROLE
+    const lancs = new Map();        // número do lançamento -> { itens, meses, quinzenas, abas }
+
+    for (const nomeAba of workbook.SheetNames) {
+      const aoa = XLSX.utils.sheet_to_json(workbook.Sheets[nomeAba],
+        { header: 1, raw: true, defval: null, blankrows: false });
+      let cab = -1, mapa = null, tipoAba = null;
+      for (let i = 0; i < Math.min(10, aoa.length); i++) {
+        const cells = aoa[i] || [];
+        const pessoas = _mapaColunas(cells, COLUNAS_PESSOAS_CONTROLE);
+        if (("id" in pessoas || "nome" in pessoas) && ("vr" in pessoas || "va" in pessoas)
+          && ("lanc" in pessoas || "lanc_vr" in pessoas || "lanc_va" in pessoas)) {
+          cab = i; mapa = pessoas; tipoAba = "pessoas"; break;
+        }
+        const meta = _mapaColunas(cells, COLUNAS_LANCAMENTOS);
+        if ("numero" in meta && ("valor" in meta || "meio" in meta || "tipo" in meta)) {
+          cab = i; mapa = meta; tipoAba = "lancamentos"; break;
+        }
+      }
+      if (cab < 0) continue;
+
+      for (let r = cab + 1; r < aoa.length; r++) {
+        const row = aoa[r] || [];
+        const get = (k) => (k in mapa && mapa[k] < row.length ? row[mapa[k]] : null);
+
+        if (tipoAba === "lancamentos") {
+          const numero = _chaveLanc(get("numero"));
+          if (!numero) continue;
+          metas.set(numero, {
+            numero,
+            vencimento: _dataBR(get("vencimento")),
+            mes_key: mesKey(get("competencia")),
+            valor_boleto: toFloat(get("valor")),
+            periodo: _texto(get("periodo")),
+            fornecedor: fornecedorBonito(get("meio")),
+            tipo: _texto(get("tipo")),
+            obs: _texto(get("obs")),
+          });
+          continue;
+        }
+
+        const nome = _texto(get("nome"));
+        const id = _texto(get("id"));
+        if (!nome && !id) continue;
+        const vr = toFloat(get("vr"));
+        const va = toFloat(get("va"));
+        const mk = mesKey(get("mes"));
+        const quinzena = get("quinzena");
+        // uma linha pode alimentar dois boletos: o do VR e o do VA (caso ALELO)
+        const destinos = [];
+        const unico = _chaveLanc(get("lanc"));
+        if (unico) destinos.push([unico, vr, va]);
+        const soVr = _chaveLanc(get("lanc_vr"));
+        if (soVr) destinos.push([soVr, vr, 0]);
+        const soVa = _chaveLanc(get("lanc_va"));
+        if (soVa) destinos.push([soVa, 0, va]);
+
+        for (const [numero, pvr, pva] of destinos) {
+          if (!pvr && !pva) continue;
+          // a chave inclui a aba: o mesmo número pode aparecer em fornecedores diferentes
+          const chaveLanc = `${nomeAba}#${numero}`;
+          if (!lancs.has(chaveLanc)) {
+            lancs.set(chaveLanc, { numero, aba: nomeAba, itens: new Map(), meses: new Set(), quinzenas: new Set() });
+          }
+          const l = lancs.get(chaveLanc);
+          if (mk) l.meses.add(mk);
+          if (quinzena !== null && quinzena !== "") l.quinzenas.add(_texto(quinzena));
+          const chave = id || norm(nome);
+          const cur = l.itens.get(chave) || { id, nome, vr: 0, va: 0 };
+          cur.vr = round(cur.vr + pvr, 2);
+          cur.va = round(cur.va + pva, 2);
+          if (!cur.nome && nome) cur.nome = nome;
+          l.itens.set(chave, cur);
+        }
+      }
+    }
+
+    const lista = [...lancs.values()].map((l) => {
+      // o metadado do CONTROLE só vale se for do mesmo fornecedor da aba (número repetido entre fornecedores)
+      const bruto = metas.get(l.numero);
+      const daAba = fornecedorBonito(l.aba);
+      const meta = bruto && (!bruto.fornecedor || !daAba || norm(bruto.fornecedor) === norm(daAba)) ? bruto : {};
+      const itens = [...l.itens.values()].filter((i) => i.vr + i.va > 0);
+      const total_vr = round(itens.reduce((a, i) => a + i.vr, 0), 2);
+      const total_va = round(itens.reduce((a, i) => a + i.va, 0), 2);
+      const meses = [...l.meses].sort();
+      return {
+        numero: l.numero,
+        fornecedor: meta.fornecedor || daAba,
+        tipo: meta.tipo || "",
+        periodo: meta.periodo || "",
+        vencimento: meta.vencimento || "",
+        obs: meta.obs || "",
+        mes_key: meta.mes_key || meses[meses.length - 1] || null,
+        meses,
+        quinzenas: [...l.quinzenas],
+        valor_boleto: meta.valor_boleto || 0,
+        aba: l.aba,
+        sem_controle: !meta.numero,
+        itens,
+        total_vr,
+        total_va,
+        total: round(total_vr + total_va, 2),
+        diferenca: round((meta.valor_boleto || 0) - (total_vr + total_va), 2),
+      };
+    }).filter((l) => l.itens.length);
+
+    // mais recentes primeiro (competência, depois número)
+    lista.sort((a, b) => (b.mes_key || "").localeCompare(a.mes_key || "")
+      || String(b.numero).localeCompare(String(a.numero), undefined, { numeric: true }));
+    if (!lista.length) {
+      throw new Error(
+        "Não encontrei lançamentos na planilha de controle " +
+        "(esperado: colaborador, VALE REFEIÇÃO/VALE ALIMENTAÇÃO e o número do lançamento)."
+      );
+    }
+    return lista;
+  }
+
+  // Reconhece o arquivo importado: planilha de CONTROLE (por lançamento) ou pedido de recarga (por quinzena).
+  function lerArquivoAlimentacao(workbook) {
+    const erros = [];
+    try {
+      return { tipo: "controle", lancamentos: lerControleAlimentacao(workbook) };
+    } catch (e) { erros.push(e.message); }
+    try {
+      return { tipo: "pedido", blocos: lerPedidoAlimentacao(workbook) };
+    } catch (e) { erros.push(e.message); }
+    throw new Error(
+      "Não reconheci a planilha. Use a planilha de CONTROLE (com o número do lançamento) " +
+      "ou o pedido de recarga da quinzena. Detalhes: " + erros.join(" | ")
+    );
   }
 
   // ---- Casamento de nomes do pedido com os colaboradores da TS ----
@@ -1013,7 +1202,8 @@
     norm, mesKey, toFloat, round, sanitizar, nomeArquivoSaida, nomeArquivoFerias, nomeArquivoAlimentacao,
     carregarTS, colaboradores, encontrarColaborador, carregarPessoas, parsePessoasColadas,
     parseBoletoSulAmerica, parseBoletoBradesco, parseBoletoPdfText, combinarBoletos,
-    lerPedidoAlimentacao, juntarPedido, casarNome,
+    lerPedidoAlimentacao, lerControleAlimentacao, lerArquivoAlimentacao, juntarPedido, casarNome,
+    fornecedorBonito,
     validarEntrada, validarFerias, validarAlimentacao,
     calcularPlanoSaude, calcularFerias, calcularAlimentacao,
     prepararExport, montarWorkbook,

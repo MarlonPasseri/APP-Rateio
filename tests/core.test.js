@@ -750,3 +750,114 @@ test("exportação de alimentação: nome do arquivo e colunas VR/VA no .xlsx", 
   assert.ok(iVr > 0 && iVa === iVr + 1);
   assert.deepEqual([det[1][iVr], det[1][iVa], det[1].at(-1)], [100, 50, "Rateado"]);
 });
+
+// ----------------------------------------------------- alimentação por lançamento (CONTROLE)
+/** Planilha de CONTROLE no layout real: abas CONTROLE, COLABORADOR, IFOOD e ALELO. */
+function controleWorkbook() {
+  const JAN25 = new Date(2025, 0, 1), ABR25 = new Date(2025, 3, 1);
+  const controle = XLSX.utils.aoa_to_sheet([
+    ["N_LANCAMENTO", "VENCIMENTO", "MES_PGT", "MÊS_COMPETENCIA", "VALOR", "PERIODO", "MEIO", "TIPO", "OBS"],
+    [73338, new Date(2025, 0, 3), JAN25, JAN25, 800, "06/01 a 15/01", "ALELO", "ALIMENTAÇÃO"],
+    [79539, new Date(2025, 0, 3), JAN25, JAN25, 400, "06/01 a 15/01", "ALELO", "REFEIÇÃO"],
+    [81118, new Date(2025, 2, 27), new Date(2025, 2, 1), ABR25, 1475, "01/04 a 15/04", "IFOOD", "ALIMENTAÇÃO/REFEIÇÃO"],
+    [86934, new Date(2025, 3, 14), ABR25, ABR25, 900, "16/04 a 30/04", "IFOOD", "ALIMENTAÇÃO/REFEIÇÃO"],
+  ]);
+  const colaborador = XLSX.utils.aoa_to_sheet([
+    ["Id Colaborador", "Nome Colaborador"],
+    ["COL001", "Armando Neto"],
+    ["COL002", "Arthur Amaral"],
+  ]);
+  const ifood = XLSX.utils.aoa_to_sheet([
+    ["ID_COLABORADOR", "COLABORADOR", "MÊS", "QUINZENA", "VALE REFEIÇÃO", "VALE ALIMENTAÇÃO", "TOTAL", "N_LANCAMENTO"],
+    ["COL001", "Armando Jose", ABR25, 1, 550, null, 550, 81118],
+    ["COL002", "Arthur Amaral", ABR25, 1, null, 550, 550, 81118],
+    [345, "Mariana Dantas", ABR25, 1, 275, 100, 375, 81118],
+    ["COL001", "Armando Jose", ABR25, 2, 350, null, 350, 86934],
+    ["COL002", "Arthur Amaral", ABR25, 2, null, 350, 350, 86934],
+    [345, "Mariana Dantas", ABR25, 2, 100, 100, 200, 86934],
+  ]);
+  const alelo = XLSX.utils.aoa_to_sheet([
+    ["ID_COLABORADOR", "COLABORADOR", "MÊS", "QUINZENA", "VALE REFEIÇÃO", "VALE ALIMENTAÇÃO", "LANÇAMENGO_REF", "LANÇAMENTO_ALI"],
+    ["COL001", "Armando", JAN25, 1, 400, null, 79539, 73338],
+    ["COL002", "Arthur", JAN25, 1, null, 400, 79539, 73338],
+    [345, "Mariana Dantas", JAN25, 1, null, 400, 79539, 73338],
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, controle, "CONTROLE");
+  XLSX.utils.book_append_sheet(wb, colaborador, "COLABORADOR");
+  XLSX.utils.book_append_sheet(wb, ifood, "IFOOD");
+  XLSX.utils.book_append_sheet(wb, alelo, "ALELO");
+  return wb;
+}
+
+test("lerControleAlimentacao separa por lançamento (não soma o histórico da pessoa)", () => {
+  const lancs = C.lerControleAlimentacao(controleWorkbook());
+  assert.deepEqual(lancs.map((l) => l.numero), ["86934", "81118", "79539", "73338"]);
+
+  const l = lancs.find((x) => x.numero === "81118");
+  assert.equal(l.fornecedor, "iFood");
+  assert.equal(l.tipo, "ALIMENTAÇÃO/REFEIÇÃO");
+  assert.equal(l.periodo, "01/04 a 15/04");
+  assert.equal(l.mes_key, "2025-04");
+  assert.equal(l.vencimento, "27/03/2025");
+  assert.equal(l.valor_boleto, 1475);
+  assert.equal(l.total, 1475);
+  assert.equal(l.diferenca, 0);
+  assert.equal(l.itens.length, 3);
+  // o Armando aparece em vários lançamentos: aqui vale só o deste boleto
+  assert.deepEqual(l.itens.find((i) => i.id === "COL001"), { id: "COL001", nome: "Armando Jose", vr: 550, va: 0 });
+  assert.deepEqual(l.itens.find((i) => i.id === "345"), { id: "345", nome: "Mariana Dantas", vr: 275, va: 100 });
+  assert.equal(lancs.find((x) => x.numero === "86934").itens.find((i) => i.id === "COL001").vr, 350);
+});
+
+test("lerControleAlimentacao: no ALELO o VR e o VA são boletos separados", () => {
+  const lancs = C.lerControleAlimentacao(controleWorkbook());
+  const ref = lancs.find((l) => l.numero === "79539");
+  const ali = lancs.find((l) => l.numero === "73338");
+  assert.equal(ref.fornecedor, "Alelo");
+  assert.deepEqual([ref.total_vr, ref.total_va, ref.total, ref.valor_boleto], [400, 0, 400, 400]);
+  assert.deepEqual([ali.total_vr, ali.total_va, ali.total, ali.valor_boleto], [0, 800, 800, 800]);
+  assert.equal(ali.itens.length, 2);                     // só quem tem VA nesse boleto
+  assert.equal(ref.mes_key, "2025-01");
+});
+
+test("lerControleAlimentacao sinaliza diferença entre boleto e soma das pessoas", () => {
+  const wb = controleWorkbook();
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets.CONTROLE, { header: 1 });
+  aoa[3][4] = 1500;                                      // boleto 81118 com R$ 25 a mais
+  wb.Sheets.CONTROLE = XLSX.utils.aoa_to_sheet(aoa);
+  const l = C.lerControleAlimentacao(wb).find((x) => x.numero === "81118");
+  assert.equal(l.valor_boleto, 1500);
+  assert.equal(l.total, 1475);
+  assert.equal(l.diferenca, 25);
+});
+
+test("lerArquivoAlimentacao distingue CONTROLE de pedido de recarga", () => {
+  const c = C.lerArquivoAlimentacao(controleWorkbook());
+  assert.equal(c.tipo, "controle");
+  assert.equal(c.lancamentos.length, 4);
+  const p = C.lerArquivoAlimentacao(pedidoWorkbook());
+  assert.equal(p.tipo, "pedido");
+  assert.equal(p.blocos.length, 2);
+  assert.throws(() => C.lerArquivoAlimentacao(tsWorkbook([])), /Não reconheci a planilha/);
+});
+
+test("juntarPedido soma por Id quando a planilha traz o identificador", () => {
+  const lancs = C.lerControleAlimentacao(controleWorkbook());
+  const dois = C.juntarPedido(lancs.filter((l) => ["81118", "86934"].includes(l.numero)));
+  const armando = dois.find((i) => i.id === "COL001");
+  assert.deepEqual(armando, { id: "COL001", nome: "Armando Jose", vr: 900, va: 0 });
+  assert.equal(dois.length, 3);
+});
+
+test("rateio usa o valor do lançamento e fecha no boleto", () => {
+  const ts = cenarioBase();
+  const lanc = C.lerControleAlimentacao(controleWorkbook()).find((l) => l.numero === "81118");
+  const funcionarios = lanc.itens.map((i) => ({ ...C.encontrarColaborador([
+    { id: "COL001", nome: "Ana Lima" }, { id: "COL002", nome: "Bruno Sá" }, { id: "345", nome: "Carla Reis" },
+  ], i), vr: i.vr, va: i.va }));
+  const res = C.calcularAlimentacao(ts, "2025-01", funcionarios, lanc.valor_boleto);
+  assert.equal(res.total_alimentacao, 1475);
+  assert.equal(res.diferenca_boleto, 0);
+  assert.equal(C.round(res.tabela_final.reduce((a, r) => a + r.valor_final, 0), 2), 1475);
+});

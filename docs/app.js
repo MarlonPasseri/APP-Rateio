@@ -12,7 +12,9 @@ let FILTRO = "todos";
 let MES_ATUAL = "";
 let ARQUIVO_TS = "";
 let RESULT_ROWS = [];
-let BLOCOS = [];
+let BLOCOS = [];            // pedido de recarga: blocos por quinzena
+let LANCAMENTOS = [];       // planilha de CONTROLE: um item por lançamento (boleto)
+let IMPORT_TIPO = "";       // "controle" | "pedido"
 let PENDENTES = [];
 
 const COLAB_MAP = new Map();
@@ -1080,7 +1082,15 @@ function salvarApelido(nomePedido, colab) {
   }
 }
 
-function casarPedido(nome) {
+// A planilha de CONTROLE traz o Id do colaborador: ele vale mais que qualquer semelhança de nome.
+function casarPedido(item) {
+  const nome = typeof item === "string" ? item : (item.nome || "");
+  const id = typeof item === "string" ? "" : (item.id || "");
+  if (id) {
+    const alvo = normalizarId(id);
+    const porId = COLABS.find((c) => c.id && normalizarId(c.id) === alvo);
+    if (porId) return { colab: porId, candidatos: [] };
+  }
   const salvo = lerApelidos()[C.norm(nome)];
   const porApelido = salvo && COLABS.find((c) => (c.id || c.nome) === salvo);
   if (porApelido) return { colab: porApelido, candidatos: [] };
@@ -1095,6 +1105,15 @@ function preencherPedido(row, item) {
   atualizarLinha(row);
 }
 
+function abrirPainelPedido(nomeArquivo, html, ajuda, comBusca) {
+  $("#pedido-blocos").innerHTML = html;
+  $("#pedido-file-name").textContent = nomeArquivo;
+  $("#pedido-ajuda").textContent = ajuda;
+  $("#pedido-busca").value = "";
+  $("#pedido-busca-wrap").classList.toggle("hidden", !comBusca);
+  $("#pedido-panel").classList.remove("hidden");
+}
+
 function renderizarBlocos(nomeArquivo) {
   const item = (bloco) =>
     `<label class="bloco"><input type="checkbox" value="${BLOCOS.indexOf(bloco)}" />` +
@@ -1107,10 +1126,37 @@ function renderizarBlocos(nomeArquivo) {
   if (avulsos.length) {
     html += `<details><summary>Pedidos avulsos (${avulsos.length})</summary>${avulsos.map(item).join("")}</details>`;
   }
-  $("#pedido-blocos").innerHTML = html;
-  $("#pedido-file-name").textContent = nomeArquivo;
-  $("#pedido-panel").classList.remove("hidden");
+  abrirPainelPedido(nomeArquivo, html, "Marque a(s) quinzena(s) deste lançamento. Saldo livre entra como VA.", false);
 }
+
+function renderizarLancamentos(nomeArquivo) {
+  const html = LANCAMENTOS.map((l, i) => {
+    const alertas = [];
+    if (l.sem_controle) alertas.push("sem linha na aba CONTROLE");
+    else if (Math.abs(l.diferenca) > 0.009) alertas.push(`boleto difere da soma em ${fmtBRL(l.diferenca)}`);
+    if (!l.mes_key) alertas.push("sem competência");
+    const detalhe = [
+      l.periodo, l.mes_key ? `competência ${mesLabel(l.mes_key)}` : "", `${l.itens.length} funcionário(s)`,
+    ].filter(Boolean).join(" · ");
+    const busca = C.norm([l.numero, l.fornecedor, l.tipo, l.periodo, mesLabel(l.mes_key || ""), l.obs].join(" "));
+    return `<label class="bloco${alertas.length ? " alerta" : ""}" data-busca="${esc(busca)}">` +
+      `<input type="checkbox" value="${i}" />` +
+      `<span class="b-num num">${esc(l.numero)}</span>` +
+      `<span class="b-tit">${esc(l.fornecedor)}${l.tipo ? ` · ${esc(l.tipo)}` : ""}` +
+      `<small>${esc(detalhe)}${alertas.length ? ` <span class="aviso">· ${esc(alertas.join(" · "))}</span>` : ""}</small></span>` +
+      `<span class="b-val num">${esc(l.valor_boleto ? fmtBRL(l.valor_boleto) : fmtBRL(l.total))}` +
+      `<small>VR ${esc(fmtBRL(l.total_vr))} · VA ${esc(fmtBRL(l.total_va))}</small></span></label>`;
+  }).join("");
+  abrirPainelPedido(nomeArquivo, html,
+    `${LANCAMENTOS.length} lançamento(s) encontrados. Marque o boleto que quer ratear (o mais recente vem primeiro).`, true);
+}
+
+$("#pedido-busca").addEventListener("input", () => {
+  const busca = C.norm($("#pedido-busca").value);
+  $("#pedido-blocos").querySelectorAll(".bloco").forEach((el) => {
+    el.hidden = !!busca && !(el.dataset.busca || "").includes(busca);
+  });
+});
 
 function renderizarPendentes() {
   const box = $("#pedido-pendentes");
@@ -1130,7 +1176,7 @@ function renderizarPendentes() {
     const nome = document.createElement("span");
     nome.innerHTML = `<strong>${esc(pendente.nome)}</strong>`;
     const dica = document.createElement("small");
-    const candidatos = C.casarNome(pendente.nome, COLABS).candidatos;
+    const candidatos = C.casarNome(pendente.nome || "", COLABS).candidatos;
     dica.textContent = candidatos.length
       ? `Possíveis: ${candidatos.map((c) => c.nome).join(", ")}`
       : "Nenhum nome parecido na TS deste mês";
@@ -1171,25 +1217,65 @@ $("#arquivo-pedido").addEventListener("change", async () => {
   try {
     const XLSX = exigirXLSX();
     const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
-    BLOCOS = C.lerPedidoAlimentacao(workbook);
-    renderizarBlocos(file.name);
+    const lido = C.lerArquivoAlimentacao(workbook);
+    IMPORT_TIPO = lido.tipo;
+    BLOCOS = lido.blocos || [];
+    LANCAMENTOS = lido.lancamentos || [];
+    if (IMPORT_TIPO === "controle") renderizarLancamentos(file.name);
+    else renderizarBlocos(file.name);
     msg($("#pedido-status"), "", "");
   } catch (e) {
-    BLOCOS = [];
+    BLOCOS = []; LANCAMENTOS = []; IMPORT_TIPO = "";
     $("#pedido-panel").classList.add("hidden");
-    msg($("#pedido-status"), e.message || "Não foi possível ler o pedido.", "erro");
+    msg($("#pedido-status"), e.message || "Não foi possível ler a planilha.", "erro");
   } finally {
     $("#arquivo-pedido").value = "";
   }
 });
 
+// Preenche os campos do lançamento (fornecedor, nº, período, competência e valor do boleto).
+function aplicarDadosLancamento(lancs) {
+  const avisos = [];
+  const fornecedores = [...new Set(lancs.map((l) => l.fornecedor).filter(Boolean))];
+  if (fornecedores.length === 1) $("#fornecedor").value = fornecedores[0];
+  else if (fornecedores.length > 1) avisos.push(`Fornecedores diferentes no mesmo rateio: ${fornecedores.join(", ")}.`);
+  $("#lancamento").value = lancs.map((l) => l.numero).join(", ");
+  const periodos = [...new Set(lancs.map((l) => l.periodo).filter(Boolean))];
+  if (periodos.length) $("#periodo").value = periodos.join(" / ");
+
+  const meses = [...new Set(lancs.map((l) => l.mes_key).filter(Boolean))];
+  if (meses.length > 1) {
+    avisos.push(`Competências diferentes: ${meses.map(mesLabel).join(", ")}. Confira o mês selecionado.`);
+  } else if (meses.length === 1 && meses[0] !== MES_ATUAL) {
+    if (!aplicarMesDoBoleto(meses[0])) {
+      avisos.push(`A competência ${mesLabel(meses[0])} do lançamento não existe na TS carregada.`);
+    }
+  }
+
+  const boleto = C.round(lancs.reduce((acc, l) => acc + (l.valor_boleto || 0), 0), 2);
+  if (boleto > 0) {
+    $("#valor_boleto").value = valorMoeda(boleto);
+  } else {
+    avisos.push("Lançamento sem valor na aba CONTROLE: confirme o valor do boleto.");
+  }
+  lancs.filter((l) => !l.sem_controle && Math.abs(l.diferenca) > 0.009).forEach((l) => {
+    avisos.push(`No lançamento ${l.numero} o boleto (${fmtBRL(l.valor_boleto)}) difere da soma das pessoas (${fmtBRL(l.total)}).`);
+  });
+  return avisos;
+}
+
 $("#btn-aplicar-pedido").addEventListener("click", () => {
+  const controle = IMPORT_TIPO === "controle";
+  const fonte = controle ? LANCAMENTOS : BLOCOS;
   const selecionados = [...document.querySelectorAll("#pedido-blocos input:checked")]
-    .map((input) => BLOCOS[Number(input.value)]);
+    .map((input) => fonte[Number(input.value)]).filter(Boolean);
   if (!selecionados.length) {
-    msg($("#pedido-status"), "Marque ao menos uma quinzena.", "erro");
+    msg($("#pedido-status"), controle ? "Marque ao menos um lançamento." : "Marque ao menos uma quinzena.", "erro");
     return;
   }
+
+  // a competência pode trocar o mês (e recriar as linhas): aplicar os dados antes de preencher
+  const avisos = controle ? aplicarDadosLancamento(selecionados) : [];
   const itens = C.juntarPedido(selecionados);
   document.querySelectorAll(".seg-row").forEach((row) => {
     row.querySelector(".seg-vr").value = "";
@@ -1198,7 +1284,7 @@ $("#btn-aplicar-pedido").addEventListener("click", () => {
   PENDENTES = [];
   let preenchidos = 0;
   itens.forEach((item) => {
-    const { colab } = casarPedido(item.nome);
+    const { colab } = casarPedido(item);
     const row = colab && localizarLinha(colab.id || colab.nome);
     if (row) {
       preencherPedido(row, item);
@@ -1207,19 +1293,23 @@ $("#btn-aplicar-pedido").addEventListener("click", () => {
       PENDENTES.push(item);
     }
   });
-  if (selecionados.length === 1 && !$("#periodo").value.trim()) {
+  if (!controle && selecionados.length === 1 && !$("#periodo").value.trim()) {
     $("#periodo").value = selecionados[0].titulo || "";
   }
   $("#pedido-panel").classList.add("hidden");
   renderizarPendentes();
   recalcSoma();
+  atualizarValidacao();
   const total = itens.reduce((acc, item) => acc + item.vr + item.va, 0);
+  const origem = controle
+    ? `Lançamento(s) ${selecionados.map((l) => l.numero).join(", ")}`
+    : $("#pedido-file-name").textContent;
   msg(
     $("#pedido-status"),
-    `${$("#pedido-file-name").textContent}: ${preenchidos} de ${itens.length} funcionários preenchidos ` +
-    `(total do pedido ${fmtBRL(total)}).` +
-    (PENDENTES.length ? ` Escolha o colaborador dos ${PENDENTES.length} nome(s) abaixo.` : ""),
-    PENDENTES.length ? "warn" : "check"
+    [`${origem}: ${preenchidos} de ${itens.length} funcionários preenchidos (total ${fmtBRL(total)}).`,
+      PENDENTES.length ? `Escolha o colaborador dos ${PENDENTES.length} nome(s) abaixo.` : "",
+      ...avisos].filter(Boolean).join(" "),
+    PENDENTES.length || avisos.length ? "warn" : "check"
   );
 });
 
