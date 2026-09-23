@@ -1232,7 +1232,13 @@ label .opt {
 }
 
 /* ---- Alimentação: pedido de recarga ---- */
-body.modo-alim .people-table .value-col {
+body:not(.modo-alim) .col-split,
+body.modo-alim.alim-total .col-split,
+body.modo-alim:not(.alim-total) .col-valor {
+  display: none !important;
+}
+
+body.modo-alim:not(.alim-total) .people-table .value-col {
   width: 150px;
 }
 
@@ -1316,6 +1322,10 @@ body.modo-alim .seg-row .money-field {
 
 .blocos details .bloco {
   margin-top: 6px;
+}
+
+.bloco[hidden] {
+  display: none !important;
 }
 
 .bloco:hover {

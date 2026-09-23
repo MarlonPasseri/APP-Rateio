@@ -700,6 +700,7 @@
           bloco.total_vr = round(bloco.itens.reduce((a, i) => a + i.vr, 0), 2);
           bloco.total_va = round(bloco.itens.reduce((a, i) => a + i.va, 0), 2);
           bloco.total = round(bloco.total_vr + bloco.total_va, 2);
+          bloco.split = true;                            // o pedido cobre VR e VA no mesmo documento
           if (bloco.total > 0) blocos.push(bloco);
         }
         bloco = null;
@@ -768,14 +769,15 @@
     for (const b of blocos || []) {
       for (const i of b.itens) {
         const k = String(i.id || "").trim() || norm(i.nome);
-        const cur = porPessoa.get(k) || { id: i.id || "", nome: i.nome, vr: 0, va: 0 };
+        const cur = porPessoa.get(k) || { id: i.id || "", nome: i.nome, valor: 0, vr: 0, va: 0 };
+        cur.valor = round(cur.valor + (i.valor !== undefined ? i.valor : i.vr + i.va), 2);
         cur.vr = round(cur.vr + i.vr, 2);
         cur.va = round(cur.va + i.va, 2);
         if (!cur.id && i.id) cur.id = i.id;
         porPessoa.set(k, cur);
       }
     }
-    return [...porPessoa.values()].filter((i) => i.vr + i.va > 0);
+    return [...porPessoa.values()].filter((i) => i.valor > 0);
   }
 
   // ---- Alimentação: leitura da planilha de CONTROLE (um rateio por lançamento/boleto) ----
@@ -789,6 +791,7 @@
     quinzena: ["quinzena"],
     vr: ["vale refeicao", "refeicao", "vr"],
     va: ["vale alimentacao", "alimentacao", "va"],
+    total: ["total", "valor total", "valor"],
     lanc: ["n_lancamento", "n lancamento", "numero do lancamento", "lancamento"],
     lanc_vr: ["lancamengo_ref", "lancamento_ref", "lancamento ref", "lancamengo ref"],
     lanc_va: ["lancamento_ali", "lancamento ali", "lancamengo_ali"],
@@ -878,19 +881,21 @@
         if (!nome && !id) continue;
         const vr = toFloat(get("vr"));
         const va = toFloat(get("va"));
+        // a coluna TOTAL manda: é o que a pessoa recebeu naquele boleto (VR/VA ficam como detalhe)
+        const totalLinha = "total" in mapa ? toFloat(get("total")) : 0;
         const mk = mesKey(get("mes"));
         const quinzena = get("quinzena");
         // uma linha pode alimentar dois boletos: o do VR e o do VA (caso ALELO)
         const destinos = [];
         const unico = _chaveLanc(get("lanc"));
-        if (unico) destinos.push([unico, vr, va]);
+        if (unico) destinos.push([unico, totalLinha || round(vr + va, 2), vr, va]);
         const soVr = _chaveLanc(get("lanc_vr"));
-        if (soVr) destinos.push([soVr, vr, 0]);
+        if (soVr) destinos.push([soVr, vr, vr, 0]);
         const soVa = _chaveLanc(get("lanc_va"));
-        if (soVa) destinos.push([soVa, 0, va]);
+        if (soVa) destinos.push([soVa, va, 0, va]);
 
-        for (const [numero, pvr, pva] of destinos) {
-          if (!pvr && !pva) continue;
+        for (const [numero, pvalor, pvr, pva] of destinos) {
+          if (!pvalor) continue;
           // a chave inclui a aba: o mesmo número pode aparecer em fornecedores diferentes
           const chaveLanc = `${nomeAba}#${numero}`;
           if (!lancs.has(chaveLanc)) {
@@ -900,7 +905,8 @@
           if (mk) l.meses.add(mk);
           if (quinzena !== null && quinzena !== "") l.quinzenas.add(_texto(quinzena));
           const chave = id || norm(nome);
-          const cur = l.itens.get(chave) || { id, nome, vr: 0, va: 0 };
+          const cur = l.itens.get(chave) || { id, nome, valor: 0, vr: 0, va: 0 };
+          cur.valor = round(cur.valor + pvalor, 2);
           cur.vr = round(cur.vr + pvr, 2);
           cur.va = round(cur.va + pva, 2);
           if (!cur.nome && nome) cur.nome = nome;
@@ -914,9 +920,10 @@
       const bruto = metas.get(l.numero);
       const daAba = fornecedorBonito(l.aba);
       const meta = bruto && (!bruto.fornecedor || !daAba || norm(bruto.fornecedor) === norm(daAba)) ? bruto : {};
-      const itens = [...l.itens.values()].filter((i) => i.vr + i.va > 0);
+      const itens = [...l.itens.values()].filter((i) => i.valor > 0);
       const total_vr = round(itens.reduce((a, i) => a + i.vr, 0), 2);
       const total_va = round(itens.reduce((a, i) => a + i.va, 0), 2);
+      const soma = round(itens.reduce((a, i) => a + i.valor, 0), 2);
       const meses = [...l.meses].sort();
       return {
         numero: l.numero,
@@ -931,11 +938,13 @@
         valor_boleto: meta.valor_boleto || 0,
         aba: l.aba,
         sem_controle: !meta.numero,
+        // cada lançamento é um boleto: um valor por pessoa (VR/VA ficam só como detalhe)
+        split: false,
         itens,
         total_vr,
         total_va,
-        total: round(total_vr + total_va, 2),
-        diferenca: round((meta.valor_boleto || 0) - (total_vr + total_va), 2),
+        total: soma,
+        diferenca: round((meta.valor_boleto || 0) - soma, 2),
       };
     }).filter((l) => l.itens.length);
 
@@ -1011,17 +1020,21 @@
     return { colab: null, exato: false, candidatos: melhores.map((x) => x.c) };
   }
 
-  // ---- Rateio de Alimentação (VR + VA por funcionário; VALOR FINAL = VALOR) ----
+  // ---- Rateio de Alimentação (valor do lançamento por funcionário) ----
+  // VALOR FINAL = valor do boleto × proporção do GP. Sem boleto informado, fecha no valor rateado.
+  // Proporção furada na TS muda a distribuição entre GPs, mas não o total.
   function validarAlimentacao(d) {
     if (!d || typeof d !== "object") return { ok: false, erros: ["Dados de entrada ausentes."] };
     const erros = [];
     if (!d.mes) erros.push("Selecione o mês de competência.");
     if (!d.fornecedor || !String(d.fornecedor).trim()) erros.push("Informe o fornecedor (ex.: iFood, Alelo).");
     const funcs = (Array.isArray(d.funcionarios) ? d.funcionarios : []).map((f) => ({
-      ...f, valor: toFloat(f.vr) + toFloat(f.va),
+      ...f, valor: _valorAlimentacao(f),
     }));
     for (const f of d.funcionarios || []) {
-      if (toFloat(f.vr) < 0 || toFloat(f.va) < 0) erros.push(`Valor negativo informado para "${f.nome || "funcionário"}".`);
+      if (toFloat(f.vr) < 0 || toFloat(f.va) < 0 || _valorAlimentacao(f) < 0) {
+        erros.push(`Valor negativo informado para "${f.nome || "funcionário"}".`);
+      }
     }
     erros.push(..._checarLista(funcs, "funcionário"));
     if (d.valor_boleto !== undefined && d.valor_boleto !== null && d.valor_boleto !== "") {
@@ -1031,31 +1044,45 @@
     return { ok: erros.length === 0, erros: [...new Set(erros)] };
   }
 
-  function calcularAlimentacao(ts, mk, funcionarios, valorBoleto) {
+  // Valor da pessoa no documento: o `valor` informado (coluna TOTAL do CONTROLE) ou VR + VA.
+  function _valorAlimentacao(f) {
+    if (f && f.valor !== undefined && f.valor !== null && f.valor !== "") return toFloat(f.valor);
+    return round(toFloat(f && f.vr) + toFloat(f && f.va), 2);
+  }
+
+  function calcularAlimentacao(ts, mk, funcionarios, valorBoleto, opcoes) {
     const itens = funcionarios.map((f) => ({
-      id: f.id, nome: f.nome, vr: toFloat(f.vr), va: toFloat(f.va), valor: toFloat(f.vr) + toFloat(f.va),
+      id: f.id, nome: f.nome, vr: toFloat(f.vr), va: toFloat(f.va), valor: _valorAlimentacao(f),
     }));
+    // a divisão VR/VA só aparece quando o documento a traz (pedido de recarga)
+    const split = (opcoes && opcoes.split !== undefined)
+      ? !!opcoes.split
+      : itens.some((i) => i.vr || i.va) && itens.every((i) => round(i.vr + i.va, 2) === i.valor);
     const a = _ratear(ts, mk, itens);
 
     const vrPorGp = new Map();
     for (const r of a.temp2) {
-      r.vr_linha = r.item.vr * r.proporcao;
-      r.va_linha = r.item.va * r.proporcao;
+      r.vr_linha = split ? r.item.vr * r.proporcao : 0;
+      r.va_linha = split ? r.item.va * r.proporcao : 0;
       vrPorGp.set(r.gp, (vrPorGp.get(r.gp) || 0) + r.vr_linha);
     }
+
+    const temBoleto = valorBoleto !== undefined && valorBoleto !== null && valorBoleto !== "" && Number(valorBoleto) > 0;
+    const alvo = temBoleto ? round(Number(valorBoleto), 2) : round(a.totalValor, 2);
+    const fator = a.totalValor ? alvo / a.totalValor : 0;
 
     const tabelaFinal = a.gps.map((gp) => {
       const valor = a.valorPorGp.get(gp);
       const prop = a.totalValor ? valor / a.totalValor : 0;
       return {
         gp, horas: round(a.horasPorGp.get(gp) || 0, 4),
-        vr: vrPorGp.get(gp) || 0,
-        valor: round(valor, 2), proporcao: prop, valor_final: round(valor, 2),
+        vr: (vrPorGp.get(gp) || 0) * fator,
+        valor: round(valor, 2), proporcao: prop, valor_final: round(valor * fator, 2),
       };
     });
-    _ajustarCentavos(tabelaFinal, round(a.totalValor, 2));
+    _ajustarCentavos(tabelaFinal, alvo);
     // VR arredondado por GP (centavos no maior VR); VA fecha a linha: VR + VA = VALOR FINAL
-    const vrRateado = round(a.temp2.reduce((s, r) => s + r.vr_linha, 0), 2);
+    const vrRateado = round(a.temp2.reduce((s, r) => s + r.vr_linha, 0) * fator, 2);
     tabelaFinal.forEach((r) => { r.vr = round(r.vr, 2); });
     const difVr = round(vrRateado - tabelaFinal.reduce((s, r) => s + r.vr, 0), 2);
     if (tabelaFinal.length && difVr !== 0) {
@@ -1063,14 +1090,15 @@
       maior.vr = round(maior.vr + difVr, 2);
     }
     for (const r of tabelaFinal) r.va = round(r.valor_final - r.vr, 2);
+    if (!split) for (const r of tabelaFinal) { delete r.vr; delete r.va; }
 
-    const temBoleto = valorBoleto !== undefined && valorBoleto !== null && valorBoleto !== "" && Number(valorBoleto) > 0;
     const totalItens = round(a.totalItens, 2);
     return {
       tipo: "alimentacao",
       mes_key: mk,
-      total_vr: round(itens.reduce((s, i) => s + i.vr, 0), 2),
-      total_va: round(itens.reduce((s, i) => s + i.va, 0), 2),
+      split,
+      total_vr: split ? round(itens.reduce((s, i) => s + i.vr, 0), 2) : 0,
+      total_va: split ? round(itens.reduce((s, i) => s + i.va, 0), 2) : 0,
       total_alimentacao: totalItens,
       total_valor_rateado: round(a.totalValor, 2),
       valor_boleto: temBoleto ? round(Number(valorBoleto), 2) : null,
@@ -1100,18 +1128,19 @@
         ["Nº do lançamento", extra.lancamento || ""],
         ["Período", extra.periodo || ""],
         ["Mês de competência", res.mes_key],
-        ["Total VR", res.total_vr],
-        ["Total VA", res.total_va],
-        ["Total do pedido", res.total_alimentacao],
       ];
+      if (res.split) info.push(["Total VR", res.total_vr], ["Total VA", res.total_va]);
+      info.push(["Total do lançamento", res.total_alimentacao]);
       if (res.valor_boleto !== null) info.push(["Valor do boleto", res.valor_boleto]);
       return {
-        titulo: "Rateio de Alimentação (VR/VA) por GP",
+        titulo: res.split ? "Rateio de Alimentação (VR/VA) por GP" : "Rateio de Alimentação por GP",
         info,
-        extraCols: [{ titulo: "VR", key: "vr" }, { titulo: "VA", key: "va" }],
+        extraCols: res.split ? [{ titulo: "VR", key: "vr" }, { titulo: "VA", key: "va" }] : [],
         detalheAba: "Detalhe_Funcionarios",
-        colValor: "Valor VR+VA",
-        detalheExtra: [{ titulo: "VR Rateado", key: "vr_linha" }, { titulo: "VA Rateado", key: "va_linha" }],
+        colValor: res.split ? "Valor VR+VA" : "Valor do lançamento",
+        detalheExtra: res.split
+          ? [{ titulo: "VR Rateado", key: "vr_linha" }, { titulo: "VA Rateado", key: "va_linha" }]
+          : [],
         nomeArquivo: nomeArquivoAlimentacao(res.mes_key, extra.fornecedor, extra.lancamento || extra.periodo),
       };
     }

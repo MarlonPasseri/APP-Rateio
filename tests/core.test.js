@@ -805,9 +805,12 @@ test("lerControleAlimentacao separa por lançamento (não soma o histórico da p
   assert.equal(l.diferenca, 0);
   assert.equal(l.itens.length, 3);
   // o Armando aparece em vários lançamentos: aqui vale só o deste boleto
-  assert.deepEqual(l.itens.find((i) => i.id === "COL001"), { id: "COL001", nome: "Armando Jose", vr: 550, va: 0 });
-  assert.deepEqual(l.itens.find((i) => i.id === "345"), { id: "345", nome: "Mariana Dantas", vr: 275, va: 100 });
-  assert.equal(lancs.find((x) => x.numero === "86934").itens.find((i) => i.id === "COL001").vr, 350);
+  assert.deepEqual(l.itens.find((i) => i.id === "COL001"),
+    { id: "COL001", nome: "Armando Jose", valor: 550, vr: 550, va: 0 });
+  assert.deepEqual(l.itens.find((i) => i.id === "345"),
+    { id: "345", nome: "Mariana Dantas", valor: 375, vr: 275, va: 100 });
+  assert.equal(lancs.find((x) => x.numero === "86934").itens.find((i) => i.id === "COL001").valor, 350);
+  assert.equal(l.split, false);                          // um boleto = um valor por pessoa
 });
 
 test("lerControleAlimentacao: no ALELO o VR e o VA são boletos separados", () => {
@@ -846,8 +849,51 @@ test("juntarPedido soma por Id quando a planilha traz o identificador", () => {
   const lancs = C.lerControleAlimentacao(controleWorkbook());
   const dois = C.juntarPedido(lancs.filter((l) => ["81118", "86934"].includes(l.numero)));
   const armando = dois.find((i) => i.id === "COL001");
-  assert.deepEqual(armando, { id: "COL001", nome: "Armando Jose", vr: 900, va: 0 });
+  assert.deepEqual(armando, { id: "COL001", nome: "Armando Jose", valor: 900, vr: 900, va: 0 });
   assert.equal(dois.length, 3);
+});
+
+test("lerControleAlimentacao usa a coluna TOTAL como valor da pessoa", () => {
+  const wb = controleWorkbook();
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets.IFOOD, { header: 1 });
+  aoa[3][6] = 400;                                       // TOTAL da Mariana ajustado à mão (≠ VR + VA)
+  wb.Sheets.IFOOD = XLSX.utils.aoa_to_sheet(aoa);
+  const l = C.lerControleAlimentacao(wb).find((x) => x.numero === "81118");
+  const mariana = l.itens.find((i) => i.id === "345");
+  assert.equal(mariana.valor, 400);                      // vale o TOTAL
+  assert.deepEqual([mariana.vr, mariana.va], [275, 100]); // VR/VA ficam como detalhe
+  assert.equal(l.total, 1500);
+});
+
+test("calcularAlimentacao sem divisão VR/VA rateia um valor único", () => {
+  const ts = cenarioBase();
+  const func = [
+    { id: "COL001", nome: "Ana Lima", valor: 550 },
+    { id: "COL002", nome: "Bruno Sá", valor: 450 },
+  ];
+  const res = C.calcularAlimentacao(ts, "2025-01", func, 1000);
+  assert.equal(res.split, false);
+  assert.equal(res.total_alimentacao, 1000);
+  assert.equal(res.diferenca_boleto, 0);
+  assert.equal(C.round(res.tabela_final.reduce((a, r) => a + r.valor_final, 0), 2), 1000);
+  assert.ok(res.tabela_final.every((r) => r.vr === undefined && r.va === undefined));
+
+  const exp = C.prepararExport(res, { fornecedor: "iFood", lancamento: "81118" });
+  assert.deepEqual(exp.extraCols, []);
+  assert.match(exp.titulo, /Alimentação por GP/);
+  const wb = XLSX.read(XLSX.write(C.montarWorkbook(res, exp), { type: "buffer", bookType: "xlsx" }), { type: "buffer" });
+  const linhas = XLSX.utils.sheet_to_json(wb.Sheets.Rateio, { header: 1 });
+  assert.deepEqual(linhas[linhas.findIndex((r) => r[0] === "GP")], ["GP", "HORAS", "VALOR", "PROPORÇÃO", "VALOR FINAL"]);
+});
+
+test("calcularAlimentacao mantém VR/VA quando o documento traz a divisão", () => {
+  const ts = cenarioBase();
+  const res = C.calcularAlimentacao(ts, "2025-01", [
+    { id: "COL001", nome: "Ana Lima", vr: 300, va: 250 },
+  ]);
+  assert.equal(res.split, true);
+  assert.equal(res.total_vr, 300);
+  assert.ok(res.tabela_final.every((r) => C.round(r.vr + r.va, 2) === r.valor_final));
 });
 
 test("rateio usa o valor do lançamento e fecha no boleto", () => {
@@ -855,9 +901,42 @@ test("rateio usa o valor do lançamento e fecha no boleto", () => {
   const lanc = C.lerControleAlimentacao(controleWorkbook()).find((l) => l.numero === "81118");
   const funcionarios = lanc.itens.map((i) => ({ ...C.encontrarColaborador([
     { id: "COL001", nome: "Ana Lima" }, { id: "COL002", nome: "Bruno Sá" }, { id: "345", nome: "Carla Reis" },
-  ], i), vr: i.vr, va: i.va }));
+  ], i), valor: i.valor }));
   const res = C.calcularAlimentacao(ts, "2025-01", funcionarios, lanc.valor_boleto);
   assert.equal(res.total_alimentacao, 1475);
   assert.equal(res.diferenca_boleto, 0);
   assert.equal(C.round(res.tabela_final.reduce((a, r) => a + r.valor_final, 0), 2), 1475);
+});
+
+test("alimentação: total fecha no boleto mesmo com proporção furada na TS", () => {
+  // Bruno com proporções somando 1,10 (TS inconsistente): a distribuição muda, o total não
+  const ts = C.carregarTS(tsWorkbook([
+    ["COL001", "Ana Lima", JAN, 168, 2718, 168, 1.0],
+    ["COL002", "Bruno Sá", JAN, 176, 2339, 176, 0.6],
+    ["COL002", "Bruno Sá", JAN, 176, 2913, 88, 0.5],
+  ]));
+  const func = [
+    { id: "COL001", nome: "Ana Lima", valor: 550 },
+    { id: "COL002", nome: "Bruno Sá", valor: 450 },
+  ];
+  const semBoleto = C.calcularAlimentacao(ts, "2025-01", func);
+  assert.equal(C.round(semBoleto.tabela_final.reduce((a, r) => a + r.valor_final, 0), 2), 1045);
+
+  const comBoleto = C.calcularAlimentacao(ts, "2025-01", func, 1000);
+  assert.equal(C.round(comBoleto.tabela_final.reduce((a, r) => a + r.valor_final, 0), 2), 1000);
+  assert.equal(comBoleto.total_valor_rateado, 1045);     // o que a TS distribuiu
+  assert.equal(comBoleto.proporcao_suspeita.length, 1);
+  const soma = comBoleto.tabela_final.reduce((a, r) => a + r.proporcao, 0);
+  assert.equal(C.round(soma, 6), 1);
+});
+
+test("alimentação com VR/VA: VR + VA continuam fechando no VALOR FINAL ajustado ao boleto", () => {
+  const ts = cenarioBase();
+  const res = C.calcularAlimentacao(ts, "2025-01", [
+    { id: "COL001", nome: "Ana Lima", vr: 300, va: 200 },
+    { id: "COL002", nome: "Bruno Sá", vr: 0, va: 500 },
+  ], 1200);
+  assert.equal(C.round(res.tabela_final.reduce((a, r) => a + r.valor_final, 0), 2), 1200);
+  for (const r of res.tabela_final) assert.equal(C.round(r.vr + r.va, 2), r.valor_final);
+  assert.equal(C.round(res.tabela_final.reduce((a, r) => a + r.vr, 0), 2), 360);   // 300/1000 do total
 });

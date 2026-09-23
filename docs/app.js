@@ -15,6 +15,7 @@ let RESULT_ROWS = [];
 let BLOCOS = [];            // pedido de recarga: blocos por quinzena
 let LANCAMENTOS = [];       // planilha de CONTROLE: um item por lançamento (boleto)
 let IMPORT_TIPO = "";       // "controle" | "pedido"
+let ALIM_SPLIT = true;      // true: colunas VR e VA (pedido de recarga) | false: coluna Valor (boleto)
 let PENDENTES = [];
 
 const COLAB_MAP = new Map();
@@ -344,10 +345,7 @@ function carregarColabs() {
   salvos.filter((p) => p.manual).forEach((p) => addSeg(p, true, true));
 
   $("#busca-colab").value = "";
-  FILTRO = "todos";
-  document.querySelectorAll(".filter-option").forEach((button) => {
-    button.classList.toggle("selected", button.dataset.filter === FILTRO);
-  });
+  aplicarFiltro("todos");
   atualizarResumoTS();
   recalcSoma(false);
   renderizarPendentes();
@@ -447,9 +445,9 @@ function addSeg(pessoa = null, manual = false, adiarAtualizacao = false) {
     cell.appendChild(money);
     return cell;
   };
-  const valorCell = campoMoeda("seg-valor", "nao-alim", dados.valor, "Valor");
-  const vrCell = campoMoeda("seg-vr", "so-alim", dados.vr, "VR");
-  const vaCell = campoMoeda("seg-va", "so-alim", dados.va, "VA");
+  const valorCell = campoMoeda("seg-valor", "col-valor", dados.valor, "Valor");
+  const vrCell = campoMoeda("seg-vr", "col-split", dados.vr, "VR");
+  const vaCell = campoMoeda("seg-va", "col-split", dados.va, "VA");
 
   const actionCell = document.createElement("td");
   actionCell.className = "action-col";
@@ -480,13 +478,23 @@ $("#btn-add-seg").addEventListener("click", () => {
 
 function valoresLinha(row) {
   const ler = (classe) => row.querySelector(classe).value.trim();
-  if (TIPO === "alimentacao") {
+  if (TIPO === "alimentacao" && ALIM_SPLIT) {
     const vr = parseNum(ler(".seg-vr"));
     const va = parseNum(ler(".seg-va"));
-    return { vr, va, valor: vr + va, preenchido: !!(ler(".seg-vr") || ler(".seg-va")) };
+    return { vr, va, valor: C.round(vr + va, 2), preenchido: !!(ler(".seg-vr") || ler(".seg-va")) };
   }
   const texto = ler(".seg-valor");
   return { valor: parseNum(texto), preenchido: !!texto };
+}
+
+// Boleto do CONTROLE = um valor por pessoa (coluna TOTAL). Pedido de recarga = VR + VA.
+function setAlimSplit(split) {
+  ALIM_SPLIT = !!split;
+  document.body.classList.toggle("alim-total", !ALIM_SPLIT);
+  $("#sub-seg").textContent = ALIM_SPLIT
+    ? TEXTOS.alimentacao.pessoas[1]
+    : "Valor de cada funcionário neste lançamento (coluna TOTAL da planilha de controle)";
+  document.querySelectorAll(".seg-row").forEach(atualizarLinha);
 }
 
 function atualizarLinha(row) {
@@ -563,15 +571,17 @@ function aplicarFiltros() {
   $("#table-empty").classList.toggle("hidden", visiveis > 0);
 }
 
+function aplicarFiltro(filtro) {
+  FILTRO = filtro;
+  document.querySelectorAll(".filter-option").forEach((b) => {
+    b.classList.toggle("selected", b.dataset.filter === filtro);
+  });
+  aplicarFiltros();
+}
+
 $("#busca-colab").addEventListener("input", aplicarFiltros);
 document.querySelectorAll(".filter-option").forEach((button) => {
-  button.addEventListener("click", () => {
-    FILTRO = button.dataset.filter;
-    document.querySelectorAll(".filter-option").forEach((b) => {
-      b.classList.toggle("selected", b === button);
-    });
-    aplicarFiltros();
-  });
+  button.addEventListener("click", () => aplicarFiltro(button.dataset.filter));
 });
 
 function localizarLinha(chave) {
@@ -911,7 +921,7 @@ $("#btn-calc").addEventListener("click", () => {
       msgs(st, validacao.erros, "erro");
       return;
     }
-    resultado = C.calcularAlimentacao(TS, MES_ATUAL, pessoas, entrada.valor_boleto);
+    resultado = C.calcularAlimentacao(TS, MES_ATUAL, pessoas, entrada.valor_boleto, { split: ALIM_SPLIT });
     extra = {
       fornecedor: entrada.fornecedor,
       lancamento: $("#lancamento").value.trim(),
@@ -960,7 +970,8 @@ $("#btn-calc").addEventListener("click", () => {
 
 function mostrarResultado(dados) {
   const saude = dados.tipo === "plano_saude";
-  const alim = dados.tipo === "alimentacao";
+  const ehAlim = dados.tipo === "alimentacao";
+  const alim = ehAlim && dados.split;                    // colunas VR/VA só quando há divisão
   const qtdPessoas = saude ? dados.qtd_segurados : dados.qtd_funcionarios;
   const totalFinal = dados.tabela_final.reduce((acc, row) => acc + row.valor_final, 0);
 
@@ -983,13 +994,22 @@ function mostrarResultado(dados) {
       ).join(", ") + "."
     );
   }
-  if (alim && dados.valor_boleto !== null && Math.abs(dados.diferenca_boleto) > 0.009) {
+  if (ehAlim && dados.valor_boleto !== null && Math.abs(dados.diferenca_boleto) > 0.009) {
     avisos.push(
-      `Boleto (${fmtBRL(dados.valor_boleto)}) e soma do pedido (${fmtBRL(dados.total_alimentacao)}) ` +
-      `diferem em ${fmtBRL(dados.diferenca_boleto)}. Confira se faltou alguma quinzena ou funcionário.`
+      `Boleto (${fmtBRL(dados.valor_boleto)}) e soma das pessoas (${fmtBRL(dados.total_alimentacao)}) ` +
+      `diferem em ${fmtBRL(dados.diferenca_boleto)}. O rateio fecha no valor do boleto — ` +
+      "confira se faltou alguém ou algum lançamento."
     );
   }
-  if (alim && PENDENTES.length) {
+  // valor rateado menor que o do documento = gente sem horas na TS (acima disso é proporção furada,
+  // já avisada acima)
+  if (ehAlim && dados.total_valor_rateado < dados.total_alimentacao - 0.009) {
+    avisos.push(
+      `Só ${fmtBRL(dados.total_valor_rateado)} de ${fmtBRL(dados.total_alimentacao)} têm horas na TS neste mês; ` +
+      "a distribuição entre GPs usa as proporções de quem tem horas."
+    );
+  }
+  if (ehAlim && PENDENTES.length) {
     avisos.push(
       `${PENDENTES.length} nome(s) do pedido sem colaborador escolhido ficaram fora do rateio: ` +
       PENDENTES.map((p) => p.nome).join(", ") + "."
@@ -1098,10 +1118,15 @@ function casarPedido(item) {
 }
 
 function preencherPedido(row, item) {
-  const vr = row.querySelector(".seg-vr");
-  const va = row.querySelector(".seg-va");
-  vr.value = valorMoeda(C.round(parseNum(vr.value) + item.vr, 2));
-  va.value = valorMoeda(C.round(parseNum(va.value) + item.va, 2));
+  if (ALIM_SPLIT) {
+    const vr = row.querySelector(".seg-vr");
+    const va = row.querySelector(".seg-va");
+    vr.value = valorMoeda(C.round(parseNum(vr.value) + item.vr, 2));
+    va.value = valorMoeda(C.round(parseNum(va.value) + item.va, 2));
+  } else {
+    const valor = row.querySelector(".seg-valor");
+    valor.value = valorMoeda(C.round(parseNum(valor.value) + (item.valor !== undefined ? item.valor : item.vr + item.va), 2));
+  }
   atualizarLinha(row);
 }
 
@@ -1205,7 +1230,9 @@ function renderizarPendentes() {
 
     const valor = document.createElement("span");
     valor.className = "b-val num";
-    valor.textContent = `VR ${fmtBRL(pendente.vr)} · VA ${fmtBRL(pendente.va)}`;
+    valor.textContent = ALIM_SPLIT
+      ? `VR ${fmtBRL(pendente.vr)} · VA ${fmtBRL(pendente.va)}`
+      : fmtBRL(pendente.valor !== undefined ? pendente.valor : pendente.vr + pendente.va);
     linha.append(nome, select, valor);
     box.appendChild(linha);
   });
@@ -1277,9 +1304,9 @@ $("#btn-aplicar-pedido").addEventListener("click", () => {
   // a competência pode trocar o mês (e recriar as linhas): aplicar os dados antes de preencher
   const avisos = controle ? aplicarDadosLancamento(selecionados) : [];
   const itens = C.juntarPedido(selecionados);
+  setAlimSplit(!controle);                               // boleto: coluna Valor | pedido: VR e VA
   document.querySelectorAll(".seg-row").forEach((row) => {
-    row.querySelector(".seg-vr").value = "";
-    row.querySelector(".seg-va").value = "";
+    row.querySelectorAll(".seg-valor, .seg-vr, .seg-va").forEach((campo) => { campo.value = ""; });
   });
   PENDENTES = [];
   let preenchidos = 0;
@@ -1300,6 +1327,10 @@ $("#btn-aplicar-pedido").addEventListener("click", () => {
   renderizarPendentes();
   recalcSoma();
   atualizarValidacao();
+  if (preenchidos) {
+    aplicarFiltro("preenchidos");                        // senão o topo da lista parece "tudo zerado"
+    $("#card-seg").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
   const total = itens.reduce((acc, item) => acc + item.vr + item.va, 0);
   const origem = controle
     ? `Lançamento(s) ${selecionados.map((l) => l.numero).join(", ")}`

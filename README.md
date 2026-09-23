@@ -81,7 +81,8 @@ nome ou ID do colaborador na primeira coluna e valor na segunda. Os filtros
      período ou competência. Ao marcar um lançamento e clicar em
      **Usar selecionadas**, o app preenche fornecedor, nº do lançamento,
      período, mês de competência e valor do boleto, e lança **apenas os valores
-     daquele boleto** para cada colaborador.
+     daquele boleto** para cada colaborador (coluna **Valor**, vinda do TOTAL).
+     A lista de pessoas passa a mostrar só quem tem valor.
    - **Pedido de recarga** (`AA-MM.xlsx`): marque a(s) quinzena(s) e clique em
      **Usar selecionadas**.
 
@@ -155,28 +156,37 @@ A planilha exportada traz a aba **Rateio** (tabela final) e a aba
 ## Lógica do rateio (Alimentação)
 
 0. **CONTROLE (por lançamento)**: as abas de pessoas (IFOOD/ALELO) trazem
-   ID_COLABORADOR, COLABORADOR, MÊS, QUINZENA, VALE REFEIÇÃO, VALE ALIMENTAÇÃO e
-   o número do lançamento. Cada **lançamento é um boleto** e vira um rateio: só
-   entram as linhas daquele número — nunca o histórico da pessoa. No ALELO, VR e
-   VA são boletos separados (`LANÇAMENGO_REF` e `LANÇAMENTO_ALI`). A aba
-   **CONTROLE** dá fornecedor (MEIO), tipo, período, competência e valor do
-   boleto. Um número repetido em fornecedores diferentes é tratado como dois
-   lançamentos distintos; se um lançamento não tiver linha na aba CONTROLE ou a
-   soma das pessoas não bater com o boleto, o app avisa.
+   ID_COLABORADOR, COLABORADOR, MÊS, QUINZENA, VALE REFEIÇÃO, VALE ALIMENTAÇÃO,
+   TOTAL e o número do lançamento. Cada **lançamento é um boleto** e vira um
+   rateio: só entram as linhas daquele número — nunca o histórico da pessoa. O
+   valor de cada pessoa é a **coluna TOTAL** (VR e VA ficam como detalhe); no
+   ALELO, VR e VA são boletos separados (`LANÇAMENGO_REF` e `LANÇAMENTO_ALI`),
+   então cada um já é um valor único. A aba **CONTROLE** dá fornecedor (MEIO),
+   tipo, período, competência e valor do boleto. Um número repetido em
+   fornecedores diferentes é tratado como dois lançamentos distintos; se um
+   lançamento não tiver linha na aba CONTROLE ou a soma das pessoas não bater
+   com o boleto, o app avisa.
 1. **Pedido**: em cada aba, a tabela com FUNCIONÁRIO e VALE REFEIÇÃO /
    VALE ALIMENTAÇÃO (e SALDO LIVRE, somado ao VA) até a linha TOTAL. Células
    com "x" valem zero. Abas com várias tabelas (ex.: `Planilha2`) aparecem
    recolhidas como "pedidos avulsos". Quem aparece em mais de uma quinzena
    selecionada tem os valores somados.
-2. Valor de cada funcionário = VR + VA **daquele lançamento/quinzena**,
+2. Valor de cada funcionário = o valor **daquele lançamento/quinzena**,
    distribuído pelos GPs do mês de competência conforme a **Proporção de Hora**
    (mesmo motor das Férias).
-3. **VALOR FINAL = VALOR** (a soma fecha no total do pedido). VR e VA também são
-   rateados por GP, com VR + VA = VALOR FINAL em cada linha.
-4. Avisos: diferença entre boleto e pedido, funcionários sem horas na TS e
-   proporções que não somam 100%.
+3. **VALOR FINAL = valor do boleto × proporção do GP** — a soma sempre fecha no
+   boleto, como no Plano de Saúde. Sem valor de boleto informado, fecha no que
+   foi rateado. A coluna **VALOR** mostra o que as proporções da TS
+   distribuíram: se ela diferir do VALOR FINAL, a TS tem proporção furada (o app
+   avisa quem está fora de 100%).
+4. As colunas **VR e VA** por GP só aparecem quando o documento traz a divisão
+   (pedido de recarga, que cobre os dois cartões); nesse caso VR + VA = VALOR
+   FINAL em cada linha. Boleto do CONTROLE tem valor único.
+5. Avisos: boleto diferente da soma das pessoas, funcionários sem horas na TS,
+   proporções fora de 100% e nomes do documento sem colaborador escolhido.
 
-A aba **Detalhe_Funcionarios** traz cada funcionário × GP com VR e VA rateados.
+A aba **Detalhe_Funcionarios** traz cada funcionário × GP (com VR e VA rateados
+quando houver divisão).
 
 ## Segurança
 
