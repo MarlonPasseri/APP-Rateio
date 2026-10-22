@@ -405,7 +405,60 @@
     };
   }
 
+  function parseBoletoAmil(texto) {
+    const limpo = String(texto || "").replace(/\u00a0/g, " ").replace(/\r/g, "").replace(/[ \t]+/g, " ");
+    if (!/Operadora:\s*AMIL\b/i.test(limpo) || !/Demonstrativo Anal[ií]tico de Faturamento/i.test(limpo)) {
+      throw new Error("O PDF não foi reconhecido como um demonstrativo de beneficiários da Amil.");
+    }
+    const competencia = limpo.match(/Mensalidade\s*-\s*(\d{2}\/\d{4})/i);
+    const contrato = limpo.match(/Contrato\s+(\d+)\s*-\s*([^\n]+)/i);
+    const fiscal = limpo.match(/N\.\s*Fiscal\s+(\d+)/i);
+    const vencimento = limpo.match(/Vencimento\s+(\d{2}\/\d{2}\/\d{4})/i);
+    const total = limpo.match(/Total Geral\s*(?:R\$\s*)?([\d.]+,\d{2})/i);
+    const quantidade = limpo.match(/Total Contrato\s+(\d+)\s+Titulares:\s*(\d+)/i);
+    const familias = new Map();
+    let beneficiarios = 0;
+    for (const linha of limpo.split("\n")) {
+      // Matrícula funcional liga titular e dependentes; pode ter zeros iniciais omitidos.
+      const r = linha.trim().match(/^(\d{9})\s+(.+?)\s*(\d{1,11})\s+(\d{11})\s+AMIL\s+.+?\s+([TDA])\s+\d{1,3}\s+.*?Mens\.\s+(?:Titular|Depend\.|Agregado)\s+.*?\s+([\d.]+,\d{2})(?:\s+([\d.]+,\d{2}))?$/i);
+      if (!r) continue;
+      const chave = r[3].padStart(11, "0");
+      const familia = familias.get(chave) || { nome: "", cpf: "", soma: 0, total: null };
+      familia.soma += toFloat(r[6]);
+      if (r[5].toUpperCase() === "T") {
+        if (familia.nome) throw new Error("A Amil contém titulares duplicados na mesma matrícula. Confira o relatório.");
+        familia.nome = r[2].trim();
+        familia.cpf = r[4];
+        familia.total = r[7] ? toFloat(r[7]) : null;
+      }
+      familias.set(chave, familia);
+      beneficiarios++;
+    }
+    const pessoas = [...familias.values()].map((f) => {
+      if (!f.nome) throw new Error("Há dependentes Amil sem titular identificado. Importe o relatório completo.");
+      if (f.total !== null && Math.abs(round(f.soma, 2) - f.total) > 0.01) {
+        throw new Error("O total de uma família Amil difere dos beneficiários lidos. Confira se o relatório está completo.");
+      }
+      return { id: `AMIL-${f.cpf}`, nome: f.nome, cpf: f.cpf, valor: f.total === null ? round(f.soma, 2) : f.total };
+    });
+    if (!competencia || !total || !fiscal || !pessoas.length) {
+      throw new Error("O relatório Amil foi reconhecido, mas faltam competência, nota fiscal, total ou titulares.");
+    }
+    if (quantidade && (beneficiarios !== +quantidade[1] || pessoas.length !== +quantidade[2])) {
+      throw new Error("A quantidade de beneficiários Amil lidos difere do relatório. Importe todas as páginas.");
+    }
+    const totalFamilias = round(pessoas.reduce((s, p) => s + p.valor, 0), 2);
+    return {
+      seguradora: "Amil", codigo_boleto: fiscal[1], contrato: contrato?.[1] || "",
+      empresa: contrato?.[2]?.trim() || "", competencia_inicio: competencia[1], competencia_fim: "",
+      mes: mesKey(competencia[1]), vencimento: vencimento?.[1] || "",
+      valor_boleto: toFloat(total[1]), pessoas, total_familias: totalFamilias,
+      total_geral_relatorio: toFloat(total[1]), qtd_segurados: beneficiarios,
+    };
+  }
+
   function parseBoletoPdfText(texto) {
+    if (/Operadora:\s*AMIL\b/i.test(String(texto || ""))) return parseBoletoAmil(texto);
     if (/SUL\s*AMERICA/i.test(String(texto || ""))) return parseBoletoSulAmerica(texto);
     if (/BRADESCO\s+SA[UÚ]DE\s*-\s*FATURA\s+T[EÉ]CNICA/i.test(String(texto || ""))) {
       return parseBoletoBradesco(texto);
@@ -1230,7 +1283,7 @@
     XLSX, COLUNAS, OBRIGATORIAS, COLUNAS_PESSOAS,
     norm, mesKey, toFloat, round, sanitizar, nomeArquivoSaida, nomeArquivoFerias, nomeArquivoAlimentacao,
     carregarTS, colaboradores, encontrarColaborador, carregarPessoas, parsePessoasColadas,
-    parseBoletoSulAmerica, parseBoletoBradesco, parseBoletoPdfText, combinarBoletos,
+    parseBoletoSulAmerica, parseBoletoBradesco, parseBoletoAmil, parseBoletoPdfText, combinarBoletos,
     lerPedidoAlimentacao, lerControleAlimentacao, lerArquivoAlimentacao, juntarPedido, casarNome,
     fornecedorBonito,
     validarEntrada, validarFerias, validarAlimentacao,

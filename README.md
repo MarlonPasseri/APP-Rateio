@@ -26,12 +26,22 @@ O arquivo baixado segue o padrão `AA-MM-Seguradora-codigo_boleto.xlsx`
 
 Depois de carregar a TS, use **Importar boleto(s)** nos dados do boleto. É
 possível selecionar vários PDFs de uma só vez, desde que pertençam à mesma
-competência. O app reconhece os layouts atuais da **SulAmérica** e da
-**Bradesco Saúde - Fatura Técnica** e extrai automaticamente:
+competência. O app reconhece os layouts atuais da **SulAmérica**, da
+**Bradesco Saúde - Fatura Técnica** e da **Amil - Demonstrativo Analítico de
+Faturamento (relação de beneficiários)** e extrai automaticamente:
 
 - seguradora, número do documento, competência, vencimento e valor do boleto;
 - titulares, identificador disponível no PDF e total de cada família;
 - mês correspondente na TS e valores de cada colaborador localizado.
+
+Na Amil, importe a relação completa de beneficiários (todas as páginas). A
+matrícula funcional liga os dependentes e agregados ao titular; o valor da
+família é o **Valor Total** da linha do titular, conferido contra a soma das
+mensalidades individuais. A competência vem de **Mensalidade - MM/AAAA**, o
+código vem de **N. Fiscal**, e o valor do documento vem de **Total Geral**.
+É possível selecionar os relatórios de várias empresas na mesma importação,
+desde que tenham a mesma competência. Relatórios incompletos são rejeitados.
+O boleto bancário Amil isolado ainda não é suportado.
 
 Na fatura técnica da Bradesco, os dependentes são agrupados pelo número do
 certificado e o registro terminado em `/00` identifica o titular. Nomes legais
