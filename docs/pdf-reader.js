@@ -1,12 +1,12 @@
 (function (root) {
   "use strict";
 
-  function montarLinhas(items) {
+  function montarLinhas(items, viewport) {
   const linhas = [];
   for (const item of items) {
     if (!item.str || !item.str.trim() || !item.transform) continue;
-    const x = item.transform[4];
-    const y = item.transform[5];
+    // Coordenadas visuais: relatórios Amil têm texto girado no PDF original.
+    const [x, y] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
     let linha = linhas.find((atual) => Math.abs(atual.y - y) < 2);
     if (!linha) {
       linha = { y, itens: [] };
@@ -16,7 +16,7 @@
   }
 
   return linhas
-    .sort((a, b) => b.y - a.y)
+    .sort((a, b) => a.y - b.y)
     .map((linha) => linha.itens
       .sort((a, b) => a.x - b.x)
       .map((item) => item.texto)
@@ -44,7 +44,7 @@
       for (let numero = 1; numero <= pdf.numPages; numero++) {
         const pagina = await pdf.getPage(numero);
         const conteudo = await pagina.getTextContent();
-        paginas.push(montarLinhas(conteudo.items));
+        paginas.push(montarLinhas(conteudo.items, pagina.getViewport({ scale: 1 })));
         pagina.cleanup();
       }
     } finally {
